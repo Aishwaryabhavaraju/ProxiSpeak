@@ -187,6 +187,95 @@ app.post("/api/avatars", async (req, res) => {
   }
 });
 
+
+/**
+ * PATCH /api/avatars/:userId/position
+ * Update an existing avatar's latest X/Y coordinates.
+ */
+app.patch("/api/avatars/:userId/position", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    let { x, y, position } = req.body || {};
+
+    // Accept either { x, y } or { position: [x, y] }
+    if (
+      (x === undefined || y === undefined) &&
+      Array.isArray(position) &&
+      position.length === 2
+    ) {
+      [x, y] = position;
+    }
+
+    // Require both coordinates
+    if (x === undefined || y === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "Provide both x and y coordinates.",
+      });
+    }
+
+    // Reject empty strings, null values, and non-numeric coordinates
+    if (
+      x === null ||
+      y === null ||
+      (typeof x === "string" && x.trim() === "") ||
+      (typeof y === "string" && y.trim() === "") ||
+      !Number.isFinite(Number(x)) ||
+      !Number.isFinite(Number(y)) ||
+      Number(x) < 0 ||
+      Number(y) < 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Coordinates must be valid non-negative numbers.",
+      });
+    }
+
+    const numX = Number(x);
+    const numY = Number(y);
+
+    // Update the existing avatar; do not create a new one
+    const avatar = await Avatar.findOneAndUpdate(
+      { userId: userId.trim() },
+      {
+        $set: {
+          position: [numX, numY],
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+        timestamps: true,
+      }
+    );
+
+    if (!avatar) {
+      return res.status(404).json({
+        success: false,
+        message: `Avatar not found for userId: ${userId}`,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Avatar position updated successfully.",
+      avatar: {
+        userId: avatar.userId,
+        username: avatar.username,
+        position: avatar.position,
+        isOnline: avatar.isOnline,
+        updatedAt: avatar.updatedAt,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update avatar position.",
+      error: error.message,
+    });
+  }
+});
+
 const startServer = async () => {
   try {
     await connectDB();
