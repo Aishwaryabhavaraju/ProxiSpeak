@@ -101,6 +101,95 @@ app.get("/api/avatars/near", async (req, res) => {
   }
 });
 
+
+/**
+ * GET /api/avatars/nearby-to/:userId?radius=100
+ * Find online avatars closest to a specific user.
+ */
+app.get("/api/avatars/nearby-to/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const radius = req.query.radius === undefined
+      ? 100
+      : Number(req.query.radius);
+
+    if (!userId || !userId.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid userId is required.",
+      });
+    }
+
+    if (
+      !Number.isFinite(radius) ||
+      radius < 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Radius must be a valid non-negative number.",
+      });
+    }
+
+    // Find the target user's current position
+    const targetAvatar = await Avatar.findOne({
+      userId: userId.trim(),
+      isOnline: true,
+    }).select("userId username position");
+
+    if (!targetAvatar) {
+      return res.status(404).json({
+        success: false,
+        message: "Target avatar not found or is offline.",
+      });
+    }
+
+    const [x, y] = targetAvatar.position;
+
+    // Find other online avatars nearest to the target position
+    const nearbyUsers = await Avatar.find({
+      userId: { $ne: targetAvatar.userId },
+      isOnline: true,
+      position: {
+        $near: [x, y],
+        $maxDistance: radius,
+      },
+    })
+      .select("userId username position isOnline")
+      .limit(100)
+      .lean();
+
+    // Include straight-line distance in virtual-world pixels
+    const usersWithDistance = nearbyUsers.map((avatar) => {
+      const [otherX, otherY] = avatar.position;
+      const distance = Math.hypot(otherX - x, otherY - y);
+
+      return {
+        ...avatar,
+        distance: Number(distance.toFixed(2)),
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Nearby users retrieved successfully.",
+      targetUser: {
+        userId: targetAvatar.userId,
+        username: targetAvatar.username,
+        position: targetAvatar.position,
+      },
+      radius,
+      count: usersWithDistance.length,
+      nearbyUsers: usersWithDistance,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to find nearby users.",
+      error: error.message,
+    });
+  }
+});
+
 // GET /api/avatars/:userId - Retrieve avatar for a specific user
 app.get("/api/avatars/:userId", async (req, res) => {
   try {
