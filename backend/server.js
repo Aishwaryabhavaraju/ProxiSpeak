@@ -5,8 +5,19 @@ const express = require("express");
 const cors = require("cors");
 const connectDB = require("./config/db");
 const Avatar = require("./models/Avatar");
+const http = require("http");
+const { Server } = require("socket.io");
 
 const app = express();
+
+const httpServer = http.createServer(app);
+
+const io = new Server(httpServer, {
+  cors: {
+    origin: "*", // Development only; restrict this in production
+    methods: ["GET", "POST", "PATCH"],
+  },
+});
 
 app.use(cors());
 app.use(express.json());
@@ -455,7 +466,6 @@ const startServer = async () => {
   try {
     await connectDB();
 
-    // Create / ensure indexes declared in the Avatar schema
     try {
       await Avatar.createIndexes();
       console.log("Avatar geospatial indexes are ready");
@@ -465,13 +475,135 @@ const startServer = async () => {
 
     const PORT = process.env.PORT || 5000;
 
-    app.listen(PORT, () => {
+    httpServer.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
+      console.log("Socket.IO movement integration is ready");
     });
   } catch (error) {
     console.error("Backend startup failed:", error.message);
     process.exit(1);
   }
 };
+
+/**
+ * Day 7: Socket.IO movement and proximity integration
+ *
+ * Client sends:
+ * socket.emit("avatar:move", {
+ *   userId: "user_A",
+ *   x: 450,
+ *   y: 320
+ * });
+ */
+io.on("connection", (socket) => {
+  console.log("Socket connected:", socket.id);
+
+  socket.on("avatar:move", async (data = {}) => {
+    try {
+      const { userId, x, y } = data;
+
+      // Validate movement data
+      if (
+        typeof userId !== "string" ||
+        !userId.trim() ||
+        x === undefined ||
+        y === undefined ||
+        x === null ||
+        y === null ||
+        (typeof x === "string" && x.trim() === "") ||
+        (typeof y === "string" && y.trim() === "") ||
+        !Number.isFinite(Number(x)) ||
+        !Number.isFinite(Number(y)) ||
+        Number(x) < 0 ||
+        Number(y) < 0
+      ) {
+        socket.emit("movement:error", {
+          message: "Provide a valid userId and non-negative X/Y coordinates.",
+        });
+        return;
+      }
+
+      const currentX = Number(x);
+      const currentY = Number(y);
+      const cleanUserId = userId.trim();
+
+      // 1. Store the latest position in MongoDB.
+      // Do not create a new avatar if it does not exist.
+      const avatar = await Avatar.findOneAndUpdate(
+        { userId: cleanUserId },
+        {
+          $set: {
+            position: [currentX, currentY],
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+        }
+      ).select("userId username position isOnline");
+
+      if (!avatar) {
+        socket.emit("movement:error", {
+          message: "Avatar not found. Create the avatar before moving it.",
+        });
+        return;
+      }
+
+      // 2. Evaluate spatial proximity after every accepted movement.
+      const nearbyAvatars = await Avatar.find({
+        userId: { $ne: cleanUserId },
+        isOnline: true,
+        position: {
+          $near: [currentX, currentY],
+          $maxDistance: 100,
+        },
+      })
+        .select("userId username position")
+        .limit(100)
+        .lean();
+
+      // 3. Include distance for each nearby avatar.
+      const nearbyUsers = nearbyAvatars.map((nearby) => {
+        const [nearX, nearY] = nearby.position;
+
+        return {
+          userId: nearby.userId,
+          username: nearby.username,
+          position: nearby.position,
+          distance: Number(
+            Math.hypot(nearX - currentX, nearY - currentY).toFixed(2)
+          ),
+        };
+      });
+
+      // 4. Broadcast the movement to other connected clients.
+      socket.broadcast.emit("avatar:moved", {
+        userId: avatar.userId,
+        username: avatar.username,
+        position: avatar.position,
+      });
+
+      // 5. Return proximity results to the moving user's client.
+      socket.emit("proximity:update", {
+        userId: avatar.userId,
+        position: avatar.position,
+        radius: 100,
+        count: nearbyUsers.length,
+        nearbyUsers,
+      });
+
+    } catch (error) {
+      console.error("Movement processing failed:", error.message);
+
+      socket.emit("movement:error", {
+        message: "Failed to process avatar movement.",
+      });
+    }
+  });
+
+  socket.on("disconnect", () => {
+    console.log("Socket disconnected:", socket.id);
+  });
+});
 
 startServer();
