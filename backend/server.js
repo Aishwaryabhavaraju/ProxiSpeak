@@ -190,6 +190,92 @@ app.get("/api/avatars/nearby-to/:userId", async (req, res) => {
   }
 });
 
+
+/**
+ * GET /api/avatars/within
+ *
+ * Example:
+ * /api/avatars/within?minX=300&minY=200&maxX=600&maxY=500
+ *
+ * Find online avatars inside a rectangular virtual-office area.
+ */
+app.get("/api/avatars/within", async (req, res) => {
+  try {
+    const { minX, minY, maxX, maxY } = req.query;
+
+    // Validate that all four boundaries are provided
+    if (
+      minX === undefined ||
+      minY === undefined ||
+      maxX === undefined ||
+      maxY === undefined
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Provide minX, minY, maxX, and maxY.",
+      });
+    }
+
+    const x1 = Number(minX);
+    const y1 = Number(minY);
+    const x2 = Number(maxX);
+    const y2 = Number(maxY);
+
+    // Validate numeric boundaries and rectangle dimensions
+    if (
+      ![x1, y1, x2, y2].every(Number.isFinite) ||
+      ![minX, minY, maxX, maxY].every(
+        (value) => String(value).trim() !== ""
+      ) ||
+      x1 < 0 ||
+      y1 < 0 ||
+      x2 < x1 ||
+      y2 < y1
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Provide valid non-negative boundaries, with maxX >= minX and maxY >= minY.",
+      });
+    }
+
+    // Find online avatars inside the rectangular area
+    const avatars = await Avatar.find({
+      isOnline: true,
+      position: {
+        $geoWithin: {
+          $box: [
+            [x1, y1],
+            [x2, y2],
+          ],
+        },
+      },
+    })
+      .select("userId username position isOnline updatedAt")
+      .limit(500)
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      message: "Avatars inside the defined area retrieved successfully.",
+      area: {
+        minX: x1,
+        minY: y1,
+        maxX: x2,
+        maxY: y2,
+      },
+      count: avatars.length,
+      avatars,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to find avatars inside the defined area.",
+      error: error.message,
+    });
+  }
+});
+
 // GET /api/avatars/:userId - Retrieve avatar for a specific user
 app.get("/api/avatars/:userId", async (req, res) => {
   try {
