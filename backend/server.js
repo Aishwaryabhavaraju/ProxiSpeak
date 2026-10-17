@@ -7,6 +7,7 @@ const connectDB = require("./config/db");
 const Avatar = require("./models/Avatar");
 const http = require("http");
 const { Server } = require("socket.io");
+const { calculateDistance } = require("./utils/proximity");
 
 const app = express();
 
@@ -282,6 +283,84 @@ app.get("/api/avatars/within", async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to find avatars inside the defined area.",
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/avatars/nearest/:userId?radius=100&limit=10
+ * Find nearest online users and calculate their distances.
+ */
+app.get("/api/avatars/nearest/:userId", async (req, res) => {
+  try {
+    const userId = req.params.userId.trim();
+    const radius =
+      req.query.radius === undefined ? 100 : Number(req.query.radius);
+    const limit =
+      req.query.limit === undefined ? 10 : Number(req.query.limit);
+
+    if (
+      !Number.isFinite(radius) ||
+      radius < 0 ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 100
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Radius must be non-negative and limit must be 1–100.",
+      });
+    }
+
+    const currentUser = await Avatar.findOne({
+      userId,
+      isOnline: true,
+    }).select("userId username position");
+
+    if (!currentUser) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found or offline.",
+      });
+    }
+
+    const nearbyUsers = await Avatar.find({
+      userId: { $ne: userId },
+      isOnline: true,
+      position: {
+        $near: currentUser.position,
+        $maxDistance: radius,
+      },
+    })
+      .select("userId username position isOnline")
+      .limit(limit)
+      .lean();
+
+    const results = nearbyUsers.map((user) => ({
+      ...user,
+      distance: Number(
+        calculateDistance(currentUser.position, user.position).toFixed(2)
+      ),
+    }));
+
+    return res.status(200).json({
+      success: true,
+      currentUser: {
+        userId: currentUser.userId,
+        username: currentUser.username,
+        position: currentUser.position,
+      },
+      radius,
+      count: results.length,
+      nearbyUsers: results,
+    });
+  } catch (error) {
+    console.error("Nearest-user calculation failed:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to calculate nearest users.",
       error: error.message,
     });
   }
