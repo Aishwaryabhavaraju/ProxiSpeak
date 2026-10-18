@@ -8,6 +8,7 @@ const Avatar = require("./models/Avatar");
 const http = require("http");
 const { Server } = require("socket.io");
 const { calculateDistance } = require("./utils/proximity");
+const { EARSHOT_RADIUS } = require("./utils/earshot");
 
 const app = express();
 
@@ -361,6 +362,72 @@ app.get("/api/avatars/nearest/:userId", async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to calculate nearest users.",
+      error: error.message,
+    });
+  }
+});
+
+
+/**
+ * GET /api/avatars/earshot/:userId
+ *
+ * Finds online users within 100 pixels of the requested avatar.
+ */
+app.get("/api/avatars/earshot/:userId", async (req, res) => {
+  try {
+    const userId = req.params.userId.trim();
+
+    const currentUser = await Avatar.findOne({
+      userId,
+      isOnline: true,
+    }).select("userId username position");
+
+    if (!currentUser) {
+      return res.status(404).json({
+        success: false,
+        message: "Avatar not found or offline.",
+      });
+    }
+
+    // MongoDB returns nearby avatars ordered by distance.
+    const nearbyAvatars = await Avatar.find({
+      userId: { $ne: userId },
+      isOnline: true,
+      position: {
+        $near: currentUser.position,
+        $maxDistance: EARSHOT_RADIUS,
+      },
+    })
+      .select("userId username position")
+      .limit(100)
+      .lean();
+
+    const usersInEarshot = nearbyAvatars.map((avatar) => ({
+      userId: avatar.userId,
+      username: avatar.username,
+      position: avatar.position,
+      distance: Number(
+        calculateDistance(
+          currentUser.position,
+          avatar.position
+        ).toFixed(2)
+      ),
+      canHear: true,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      userId: currentUser.userId,
+      radius: EARSHOT_RADIUS,
+      count: usersInEarshot.length,
+      usersInEarshot,
+    });
+  } catch (error) {
+    console.error("Earshot calculation failed:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to identify users within earshot.",
       error: error.message,
     });
   }
