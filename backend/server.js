@@ -9,6 +9,7 @@ const http = require("http");
 const { Server } = require("socket.io");
 const { calculateDistance } = require("./utils/proximity");
 const { EARSHOT_RADIUS } = require("./utils/earshot");
+const { getProximityChanges } = require("./utils/proximityTracker");
 
 const app = express();
 
@@ -641,14 +642,16 @@ const startServer = async () => {
  *   y: 320
  * });
  */
+// Stores the previous nearby-user IDs for each moving user.
+const previousNearbyUsers = new Map();
+
 io.on("connection", (socket) => {
   console.log("Socket connected:", socket.id);
 
-  socket.on("avatar:move", async (data = {}) => {
+  socket.on("avatar:move", async (data) => {
     try {
-      const { userId, x, y } = data;
+      const { userId, x, y } = data || {};
 
-      // Validate movement data
       if (
         typeof userId !== "string" ||
         !userId.trim() ||
@@ -656,93 +659,102 @@ io.on("connection", (socket) => {
         y === undefined ||
         x === null ||
         y === null ||
-        (typeof x === "string" && x.trim() === "") ||
-        (typeof y === "string" && y.trim() === "") ||
+        x === "" ||
+        y === "" ||
         !Number.isFinite(Number(x)) ||
         !Number.isFinite(Number(y)) ||
         Number(x) < 0 ||
         Number(y) < 0
       ) {
-        socket.emit("movement:error", {
-          message: "Provide a valid userId and non-negative X/Y coordinates.",
+        return socket.emit("movement:error", {
+          message: "Valid userId, x, and y are required.",
         });
-        return;
       }
 
-      const currentX = Number(x);
-      const currentY = Number(y);
-      const cleanUserId = userId.trim();
+      const position = [Number(x), Number(y)];
 
-      // 1. Store the latest position in MongoDB.
-      // Do not create a new avatar if it does not exist.
+      // Update the existing avatar; do not create a new one.
       const avatar = await Avatar.findOneAndUpdate(
-        { userId: cleanUserId },
-        {
-          $set: {
-            position: [currentX, currentY],
-          },
-        },
-        {
-          new: true,
-          runValidators: true,
-        }
-      ).select("userId username position isOnline");
+        { userId: userId.trim() },
+        { $set: { position, isOnline: true } },
+        { new: true, runValidators: true }
+      );
 
       if (!avatar) {
-        socket.emit("movement:error", {
-          message: "Avatar not found. Create the avatar before moving it.",
+        return socket.emit("movement:error", {
+          message: "Avatar not found.",
         });
-        return;
       }
 
-      // 2. Evaluate spatial proximity after every accepted movement.
+      // Find currently online users within 100 pixels.
       const nearbyAvatars = await Avatar.find({
-        userId: { $ne: cleanUserId },
+        userId: { $ne: avatar.userId },
         isOnline: true,
         position: {
-          $near: [currentX, currentY],
-          $maxDistance: 100,
+          $near: position,
+          $maxDistance: EARSHOT_RADIUS,
         },
       })
         .select("userId username position")
-        .limit(100)
-        .lean();
+        .limit(100);
 
-      // 3. Include distance for each nearby avatar.
-      const nearbyUsers = nearbyAvatars.map((nearby) => {
-        const [nearX, nearY] = nearby.position;
+      // Compare the old and new nearby-user sets.
+      const previousIds = previousNearbyUsers.get(avatar.userId) || [];
 
-        return {
-          userId: nearby.userId,
-          username: nearby.username,
-          position: nearby.position,
-          distance: Number(
-            Math.hypot(nearX - currentX, nearY - currentY).toFixed(2)
-          ),
-        };
-      });
+      const currentIds = nearbyAvatars.map(
+        (nearbyAvatar) => nearbyAvatar.userId
+      );
 
-      // 4. Broadcast the movement to other connected clients.
-      socket.broadcast.emit("avatar:moved", {
-        userId: avatar.userId,
-        username: avatar.username,
-        position: avatar.position,
-      });
+      const { entered, exited } = getProximityChanges(
+        previousIds,
+        currentIds
+      );
 
-      // 5. Return proximity results to the moving user's client.
+      // Save the current state for the next movement.
+      previousNearbyUsers.set(avatar.userId, currentIds);
+
+      // Notify the moving user's socket about users entering earshot.
+      for (const enteredUserId of entered) {
+        const enteredAvatar = nearbyAvatars.find(
+          (item) => item.userId === enteredUserId
+        );
+
+        socket.emit("proximity:enter", {
+          userId: avatar.userId,
+          nearbyUser: enteredAvatar,
+          radius: EARSHOT_RADIUS,
+          message: `${enteredAvatar?.username || enteredUserId} entered earshot.`,
+        });
+      }
+
+      // Notify the moving user's socket about users leaving earshot.
+      for (const exitedUserId of exited) {
+        socket.emit("proximity:exit", {
+          userId: avatar.userId,
+          nearbyUserId: exitedUserId,
+          radius: EARSHOT_RADIUS,
+          message: `${exitedUserId} left earshot.`,
+        });
+      }
+
+      // Send the complete current proximity state.
       socket.emit("proximity:update", {
         userId: avatar.userId,
-        position: avatar.position,
-        radius: 100,
-        count: nearbyUsers.length,
-        nearbyUsers,
+        radius: EARSHOT_RADIUS,
+        count: nearbyAvatars.length,
+        nearbyUsers: nearbyAvatars,
       });
 
+      // Broadcast the movement to connected clients.
+      socket.broadcast.emit("avatar:moved", {
+        userId: avatar.userId,
+        position,
+      });
     } catch (error) {
-      console.error("Movement processing failed:", error.message);
+      console.error("Movement/proximity error:", error);
 
       socket.emit("movement:error", {
-        message: "Failed to process avatar movement.",
+        message: "Failed to update movement and proximity.",
       });
     }
   });
@@ -752,4 +764,14 @@ io.on("connection", (socket) => {
   });
 });
 
-startServer();
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = {
+  app,
+  httpServer,
+  io,
+  previousNearbyUsers,
+  startServer,
+};
