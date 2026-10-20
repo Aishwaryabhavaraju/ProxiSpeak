@@ -434,6 +434,97 @@ app.get("/api/avatars/earshot/:userId", async (req, res) => {
   }
 });
 
+// Day 11: Generate proximity groups for all online users
+app.get("/api/avatars/proximity-groups", async (req, res) => {
+  try {
+    const radius =
+      req.query.radius === undefined
+        ? EARSHOT_RADIUS
+        : Number(req.query.radius);
+
+    if (!Number.isFinite(radius) || radius <= 0 || radius > 1000) {
+      return res.status(400).json({
+        success: false,
+        message: "Radius must be greater than 0 and at most 1000.",
+      });
+    }
+
+    // Get all online avatars.
+    const onlineAvatars = await Avatar.find({ isOnline: true })
+      .select("userId username position")
+      .lean();
+
+    const proximityGroups = [];
+
+    // Find nearby users for each online avatar.
+    for (const avatar of onlineAvatars) {
+      const nearbyAvatars = await Avatar.find({
+        userId: { $ne: avatar.userId },
+        isOnline: true,
+        position: {
+          $near: avatar.position,
+          $maxDistance: radius,
+        },
+      })
+        .select("userId username position")
+        .limit(100)
+        .lean();
+
+      const nearbyUsers = nearbyAvatars.map((nearbyAvatar) => {
+        const [x1, y1] = avatar.position;
+        const [x2, y2] = nearbyAvatar.position;
+
+        const distance = Math.hypot(x2 - x1, y2 - y1);
+
+        return {
+          userId: nearbyAvatar.userId,
+          username: nearbyAvatar.username,
+          position: nearbyAvatar.position,
+          distance: Number(distance.toFixed(2)),
+          canHear: distance <= radius,
+        };
+      });
+
+      proximityGroups.push({
+        groupId: `proximity-${avatar.userId}`,
+        centerUser: {
+          userId: avatar.userId,
+          username: avatar.username,
+          position: avatar.position,
+        },
+        radius,
+        memberCount: nearbyUsers.length + 1,
+        nearbyUserCount: nearbyUsers.length,
+        members: [
+          {
+            userId: avatar.userId,
+            username: avatar.username,
+            position: avatar.position,
+            distance: 0,
+            canHear: true,
+          },
+          ...nearbyUsers,
+        ],
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      radius,
+      onlineUserCount: onlineAvatars.length,
+      groupCount: proximityGroups.length,
+      proximityGroups,
+    });
+  } catch (error) {
+    console.error("Proximity group error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to generate proximity groups.",
+    });
+  }
+});
+
 // GET /api/avatars/:userId - Retrieve avatar for a specific user
 app.get("/api/avatars/:userId", async (req, res) => {
   try {
