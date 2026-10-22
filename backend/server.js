@@ -8,7 +8,10 @@ const Avatar = require("./models/Avatar");
 const http = require("http");
 const { Server } = require("socket.io");
 const { calculateDistance } = require("./utils/proximity");
-const { EARSHOT_RADIUS } = require("./utils/earshot");
+const {
+  findNearbyUsers,
+  EARSHOT_RADIUS,
+} = require("./utils/fastProximity");
 const { getProximityChanges } = require("./utils/proximityTracker");
 
 const app = express();
@@ -798,34 +801,15 @@ io.on("connection", (socket) => {
         });
       }
 
-      // Find online avatars within the earshot radius.
-      const nearbyAvatars = await Avatar.find({
-        userId: { $ne: avatar.userId },
-        isOnline: true,
-        position: {
-          $near: position,
-          $maxDistance: EARSHOT_RADIUS,
-        },
-      })
-        .select("userId username position")
-        .limit(100)
-        .lean();
+      const result = await findNearbyUsers(
+        Avatar,
+        avatar.userId,
+        position,
+        EARSHOT_RADIUS,
+        100
+      );
 
-      // Create a peer list for the moving avatar.
-      const peers = nearbyAvatars.map((peer) => {
-        const distance = Math.hypot(
-          peer.position[0] - position[0],
-          peer.position[1] - position[1]
-        );
-
-        return {
-          userId: peer.userId,
-          username: peer.username,
-          position: peer.position,
-          distance: Number(distance.toFixed(2)),
-          canHear: distance <= EARSHOT_RADIUS,
-        };
-      });
+      const peers = result.users;
 
       // Compare the previous and current peer lists.
       const previousIds = previousNearbyUsers.get(avatar.userId) || [];
@@ -865,13 +849,19 @@ io.on("connection", (socket) => {
         previousNearbyUsers.set(peerId, [...peerIds]);
       }
 
-      // Send the complete peer list to the moving user.
-      // Member 1 can use this event to reconcile WebRTC connections.
+      // Send the optimized proximity result to Member 1.
       socket.emit("proximity:peers:update", {
         userId: avatar.userId,
-        radius: EARSHOT_RADIUS,
-        peers,
+        radius: result.radius,
+        count: result.count,
+        queryTimeMs: result.queryTimeMs,
+        peers: result.users,
       });
+
+      console.log(
+        `Proximity query: ${result.queryTimeMs} ms, ` +
+        `${result.count} nearby users for ${avatar.userId}`
+      );
 
       // Notify both sides when a peer enters earshot.
       for (const peer of entered) {
