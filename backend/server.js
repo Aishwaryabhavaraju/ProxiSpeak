@@ -763,6 +763,41 @@ io.on("connection", (socket) => {
     });
   });
 
+  // Relay a WebRTC offer, answer, or ICE candidate to the target user.
+  const relayWebRTCSignal = (socket, eventName) => {
+    socket.on(eventName, ({ targetUserId, payload } = {}) => {
+      const senderUserId = socket.data.userId;
+
+      if (
+        !senderUserId ||
+        typeof targetUserId !== "string" ||
+        !targetUserId.trim() ||
+        !payload
+      ) {
+        return socket.emit("webrtc:error", {
+          message: "Invalid WebRTC signaling payload.",
+        });
+      }
+
+      const targetSocketId = userSockets.get(targetUserId.trim());
+
+      if (!targetSocketId) {
+        return socket.emit("webrtc:error", {
+          message: `Peer ${targetUserId} is not connected.`,
+        });
+      }
+
+      io.to(targetSocketId).emit(eventName, {
+        senderUserId,
+        payload,
+      });
+    });
+  };
+
+  relayWebRTCSignal(socket, "webrtc:offer");
+  relayWebRTCSignal(socket, "webrtc:answer");
+  relayWebRTCSignal(socket, "webrtc:ice-candidate");
+
   socket.on("avatar:move", async (data) => {
     try {
       const { userId, x, y } = data || {};
