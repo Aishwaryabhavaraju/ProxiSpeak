@@ -1,94 +1,152 @@
-const path = require("path");
-require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
-
 const mongoose = require("mongoose");
+const path = require("path");
+require("dotenv").config({
+  path: path.resolve(__dirname, "../.env"),
+});
+
 const Avatar = require("../models/Avatar");
-const { findNearbyUsers, EARSHOT_RADIUS } =
-  require("../utils/fastProximity");
 
-// Replace this import with the exact connectDB import
-// already used in your backend/server.js.
-const connectDB = require("../config/db");
+const TEST_PREFIX = "benchmark_day15_";
+const RADIUS = 100;
+const MAX_RESULTS = 100;
+const WARMUP_RUNS = 10;
+const BENCHMARK_RUNS = 100;
 
-const WARMUP_RUNS = 20;
-const TOTAL_RUNS = 200;
-const TARGET_MS = 20;
+const AVATAR_COUNTS = [100, 500, 1000, 5000];
 
-function percentile(values, percent) {
-  const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.ceil((percent / 100) * sorted.length) - 1;
-  return sorted[Math.max(0, index)];
+function randomCoordinate() {
+  return Math.floor(Math.random() * 1000);
 }
 
-async function benchmark() {
-  try {
-    await connectDB();
+function percentile(values, p) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.ceil(p * sorted.length) - 1];
+}
 
-    const testAvatar = await Avatar.findOne({
-      isOnline: true,
-      position: { $exists: true },
-    }).lean();
+function getStats(times) {
+  const average =
+    times.reduce((total, time) => total + time, 0) / times.length;
 
-    if (!testAvatar) {
-      throw new Error(
-        "No online test avatar found. Create an online avatar first."
-      );
-    }
+  return {
+    average: Number(average.toFixed(3)),
+    p95: Number(percentile(times, 0.95).toFixed(3)),
+    min: Number(Math.min(...times).toFixed(3)),
+    max: Number(Math.max(...times).toFixed(3)),
+  };
+}
 
-    console.log(`Benchmark user: ${testAvatar.userId}`);
-    console.log(`Radius: ${EARSHOT_RADIUS}px`);
+async function seedAvatars(count) {
+  const avatars = Array.from({ length: count }, (_, index) => ({
+    userId: `${TEST_PREFIX}${index}`,
+    username: `BenchmarkUser${index}`,
+    position: [randomCoordinate(), randomCoordinate()],
+    isOnline: true,
+  }));
 
-    // Warm up the database and query execution.
-    for (let i = 0; i < WARMUP_RUNS; i++) {
-      await findNearbyUsers(
-        Avatar,
-        testAvatar.userId,
-        testAvatar.position,
-        EARSHOT_RADIUS,
-        100
-      );
-    }
+  // Insert in batches to avoid one very large insert.
+  const batchSize = 500;
 
-    const timings = [];
+  for (let i = 0; i < avatars.length; i += batchSize) {
+    await Avatar.insertMany(avatars.slice(i, i + batchSize));
+  }
+}
 
-    for (let i = 0; i < TOTAL_RUNS; i++) {
-      const result = await findNearbyUsers(
-        Avatar,
-        testAvatar.userId,
-        testAvatar.position,
-        EARSHOT_RADIUS,
-        100
-      );
+async function runQuery() {
+  const start = process.hrtime.bigint();
 
-      timings.push(result.queryTimeMs);
-    }
+  await Avatar.find({
+    userId: { $not: { $regex: `^${TEST_PREFIX}` } },
+    isOnline: true,
+    position: {
+      $near: [500, 500],
+      $maxDistance: RADIUS,
+    },
+  })
+    .select("userId username position")
+    .limit(MAX_RESULTS)
+    .lean();
 
-    const average =
-      timings.reduce((sum, value) => sum + value, 0) / timings.length;
+  const end = process.hrtime.bigint();
 
-    const median = percentile(timings, 50);
-    const p95 = percentile(timings, 95);
-    const max = Math.max(...timings);
+  return Number(end - start) / 1_000_000;
+}
 
-    console.log("\n--- ProxiSpeak Benchmark ---");
-    console.log(`Runs: ${TOTAL_RUNS}`);
-    console.log(`Average: ${average.toFixed(3)} ms`);
-    console.log(`Median:  ${median.toFixed(3)} ms`);
-    console.log(`P95:     ${p95.toFixed(3)} ms`);
-    console.log(`Maximum: ${max.toFixed(3)} ms`);
-    console.log(`Target:  under ${TARGET_MS} ms`);
+async function benchmarkCount(count) {
+  console.log(`\nTesting ${count} online benchmark avatars...`);
 
-    console.log(
-      p95 < TARGET_MS
-        ? "RESULT: P95 target achieved."
-        : "RESULT: P95 target not achieved; investigate query performance."
+  // Remove only this script's previous test records.
+  await Avatar.deleteMany({
+    userId: { $regex: `^${TEST_PREFIX}` },
+  });
+
+  await seedAvatars(count);
+
+  // Warm up the query before recording timings.
+  for (let i = 0; i < WARMUP_RUNS; i++) {
+    await runQuery();
+  }
+
+  const times = [];
+
+  for (let i = 0; i < BENCHMARK_RUNS; i++) {
+    times.push(await runQuery());
+  }
+
+  const stats = getStats(times);
+
+  return {
+    avatars: count,
+    runs: BENCHMARK_RUNS,
+    averageMs: stats.average,
+    p95Ms: stats.p95,
+    minMs: stats.min,
+    maxMs: stats.max,
+    target: stats.p95 < 20 ? "PASS" : "CHECK",
+  };
+}
+
+async function main() {
+  if (!process.env.MONGODB_URI) {
+    throw new Error(
+      "MONGODB_URI is missing. Check the backend/.env file."
     );
-  } catch (error) {
-    console.error("Benchmark failed:", error.message);
-    process.exitCode = 1;
+  }
+
+  try {
+    await mongoose.connect(process.env.MONGODB_URI);
+    console.log("Connected to MongoDB.");
+
+    // Ensure the geospatial index exists before benchmarking.
+    await Avatar.createIndexes();
+
+    console.log("Radius:", RADIUS, "pixels");
+    console.log("Maximum returned peers:", MAX_RESULTS);
+    console.log("Warm-up queries:", WARMUP_RUNS);
+    console.log("Measured queries per test:", BENCHMARK_RUNS);
+
+    const results = [];
+
+    for (const count of AVATAR_COUNTS) {
+      results.push(await benchmarkCount(count));
+    }
+
+    console.log("\n===== DAY 15 PROXIMITY BENCHMARK =====");
+    console.table(results);
+    console.log("All latency measurements are in milliseconds.");
+    console.log("PASS means p95 latency is below 20 ms.");
   } finally {
+    // Delete only records created by this benchmark.
+    await Avatar.deleteMany({
+      userId: { $regex: `^${TEST_PREFIX}` },
+    }).catch((error) => {
+      console.error("Test-avatar cleanup failed:", error.message);
+    });
+
     await mongoose.disconnect();
   }
 }
 
-benchmark();
+main().catch((error) => {
+  console.error("Benchmark failed:", error);
+  process.exitCode = 1;
+});
