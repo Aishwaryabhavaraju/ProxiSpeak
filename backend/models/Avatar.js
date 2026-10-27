@@ -44,7 +44,10 @@ const avatarSchema = new mongoose.Schema(
   }
 );
 
-// 2D index for virtual Canvas coordinates, not geographic coordinates.
-avatarSchema.index({ position: "2d" }, { min: -100000, max: 100000 });
+// Canvas [X, Y] coordinates require a legacy 2d index.
+avatarSchema.index(
+  { position: "2d" },
+  { min: -100000, max: 100000 }
+);
 
 module.exports = mongoose.model("Avatar", avatarSchema);

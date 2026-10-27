@@ -70,50 +70,90 @@ app.get("/api/avatars/near", async (req, res) => {
   try {
     const x = Number(req.query.x);
     const y = Number(req.query.y);
-    const radius = Number(req.query.radius ?? 100);
+    const radius =
+      req.query.radius === undefined
+        ? 100
+        : Number(req.query.radius);
+
     const excludeUserId = req.query.excludeUserId;
 
+    // Validate query parameters.
     if (
+      req.query.x === undefined ||
+      req.query.y === undefined ||
       !Number.isFinite(x) ||
       !Number.isFinite(y) ||
       x < 0 ||
-      y < 0 ||
-      !Number.isFinite(radius) ||
-      radius < 0
+      y < 0
     ) {
       return res.status(400).json({
         success: false,
-        message: "Provide valid non-negative x, y, and radius values.",
+        message: "Provide valid non-negative x and y coordinates.",
       });
     }
 
-    const query = {
+    if (
+      !Number.isFinite(radius) ||
+      radius <= 0 ||
+      radius > 1000
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Radius must be greater than 0 and at most 1000.",
+      });
+    }
+
+    // Retrieve only online users, optionally excluding the requester.
+    const filter = {
+      isOnline: true,
       position: {
         $near: [x, y],
         $maxDistance: radius,
       },
-      isOnline: true,
     };
 
     if (excludeUserId) {
-      query.userId = { $ne: excludeUserId };
+      filter.userId = { $ne: excludeUserId };
     }
 
-    const nearbyAvatars = await Avatar.find(query)
-      .select("userId username position isOnline")
-      .limit(100);
+    const start = process.hrtime.bigint();
 
-    res.json({
+    const users = await Avatar.find(filter)
+      .select("userId username position -_id")
+      .limit(100)
+      .lean()
+      .exec();
+
+    const queryTimeMs =
+      Number(process.hrtime.bigint() - start) / 1_000_000;
+
+    const results = users.map((user) => {
+      const distance = Math.hypot(
+        user.position[0] - x,
+        user.position[1] - y
+      );
+
+      return {
+        ...user,
+        distance: Number(distance.toFixed(2)),
+        canHear: distance <= 100,
+      };
+    });
+
+    return res.status(200).json({
       success: true,
-      count: nearbyAvatars.length,
+      center: [x, y],
       radius,
-      nearbyAvatars,
+      count: results.length,
+      queryTimeMs: Number(queryTimeMs.toFixed(3)),
+      users: results,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Nearby-user query failed:", error);
+
+    return res.status(500).json({
       success: false,
-      message: "Failed to find nearby avatars",
-      error: error.message,
+      message: "Failed to find nearby users.",
     });
   }
 });
