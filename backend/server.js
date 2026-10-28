@@ -13,6 +13,11 @@ const {
   EARSHOT_RADIUS,
 } = require("./utils/fastProximity");
 const { getProximityChanges } = require("./utils/proximityTracker");
+const {
+  ProximityStateManager,
+} = require("./utils/proximityStateManager");
+
+const proximityState = new ProximityStateManager(100);
 
 const app = express();
 
@@ -781,6 +786,120 @@ const userSockets = new Map();
 
 // Stores each user's latest known proximity peers.
 const previousNearbyUsers = new Map();
+const originalPreviousNearbyClear = previousNearbyUsers.clear.bind(previousNearbyUsers);
+previousNearbyUsers.clear = function () {
+  originalPreviousNearbyClear();
+  proximityState.positions.clear();
+  proximityState.activePairs.clear();
+  userProfiles.clear();
+};
+
+// Stores user metadata (username, position) for event payloads.
+const userProfiles = new Map();
+
+/**
+ * Helper to dispatch proximity enter/exit events to connected users.
+ * Matches Member 1's signaling implementation.
+ */
+function notifyProximityEvents(events, currentSocket = null) {
+  for (const event of events) {
+    const socketA = userSockets.get(event.userA);
+    const socketB = userSockets.get(event.userB);
+
+    const userAProfile = userProfiles.get(event.userA);
+    const userBProfile = userProfiles.get(event.userB);
+
+    if (event.type === "enter") {
+      const payloadA = {
+        userId: event.userA,
+        peerUserId: event.userB,
+        distance: event.distance,
+        peer: {
+          userId: event.userB,
+          username: userBProfile?.username || event.userB,
+          position: userBProfile?.position || proximityState.positions.get(event.userB),
+          distance: event.distance,
+        },
+      };
+
+      const payloadB = {
+        userId: event.userB,
+        peerUserId: event.userA,
+        distance: event.distance,
+        peer: {
+          userId: event.userA,
+          username: userAProfile?.username || event.userA,
+          position: userAProfile?.position || proximityState.positions.get(event.userA),
+          distance: event.distance,
+        },
+      };
+
+      if (currentSocket && currentSocket.id === socketA) {
+        currentSocket.emit("proximity:peer:entered", payloadA);
+      } else if (socketA) {
+        io.to(socketA).emit("proximity:peer:entered", payloadA);
+      }
+
+      if (currentSocket && currentSocket.id === socketB) {
+        currentSocket.emit("proximity:peer:entered", payloadB);
+      } else if (socketB) {
+        io.to(socketB).emit("proximity:peer:entered", payloadB);
+      }
+
+      // Maintain previousNearbyUsers map for backward compatibility
+      const listA = previousNearbyUsers.get(event.userA) || [];
+      if (!listA.includes(event.userB)) {
+        previousNearbyUsers.set(event.userA, [...listA, event.userB]);
+      }
+      const listB = previousNearbyUsers.get(event.userB) || [];
+      if (!listB.includes(event.userA)) {
+        previousNearbyUsers.set(event.userB, [...listB, event.userA]);
+      }
+    }
+
+    if (event.type === "exit") {
+      const payloadA = {
+        userId: event.userA,
+        peerUserId: event.userB,
+        peerId: event.userB,
+        reason: event.reason || "out_of_range",
+        distance: event.distance,
+      };
+
+      const payloadB = {
+        userId: event.userB,
+        peerUserId: event.userA,
+        peerId: event.userA,
+        reason: event.reason || "out_of_range",
+        distance: event.distance,
+      };
+
+      if (currentSocket && currentSocket.id === socketA) {
+        currentSocket.emit("proximity:peer:left", payloadA);
+      } else if (socketA) {
+        io.to(socketA).emit("proximity:peer:left", payloadA);
+      }
+
+      if (currentSocket && currentSocket.id === socketB) {
+        currentSocket.emit("proximity:peer:left", payloadB);
+      } else if (socketB) {
+        io.to(socketB).emit("proximity:peer:left", payloadB);
+      }
+
+      // Maintain previousNearbyUsers map for backward compatibility
+      const listA = previousNearbyUsers.get(event.userA) || [];
+      previousNearbyUsers.set(
+        event.userA,
+        listA.filter((id) => id !== event.userB)
+      );
+      const listB = previousNearbyUsers.get(event.userB) || [];
+      previousNearbyUsers.set(
+        event.userB,
+        listB.filter((id) => id !== event.userA)
+      );
+    }
+  }
+}
 
 io.on("connection", (socket) => {
   console.log("Socket connected:", socket.id);
@@ -796,6 +915,21 @@ io.on("connection", (socket) => {
 
     userSockets.set(normalizedUserId, socket.id);
     socket.data.userId = normalizedUserId;
+
+    try {
+      const userDoc = await Avatar.findOne({ userId: normalizedUserId });
+      if (userDoc) {
+        userProfiles.set(normalizedUserId, {
+          username: userDoc.username,
+          position: userDoc.position,
+        });
+        if (Array.isArray(userDoc.position) && userDoc.position.length === 2) {
+          proximityState.positions.set(normalizedUserId, [...userDoc.position]);
+        }
+      }
+    } catch (e) {
+      // Ignored if DB is unavailable in test environment
+    }
 
     socket.emit("avatar:registered", {
       success: true,
@@ -876,6 +1010,11 @@ io.on("connection", (socket) => {
         });
       }
 
+      userProfiles.set(avatar.userId, {
+        username: avatar.username,
+        position: avatar.position,
+      });
+
       const result = await findNearbyUsers(
         Avatar,
         avatar.userId,
@@ -886,43 +1025,20 @@ io.on("connection", (socket) => {
 
       const peers = result.users;
 
-      // Compare the previous and current peer lists.
-      const previousIds = previousNearbyUsers.get(avatar.userId) || [];
-      const currentIds = peers.map((peer) => peer.userId);
-
-      const previousSet = new Set(previousIds);
-      const currentSet = new Set(currentIds);
-
-      const entered = peers.filter(
-        (peer) => !previousSet.has(peer.userId)
-      );
-
-      const exited = previousIds.filter(
-        (peerId) => !currentSet.has(peerId)
-      );
-
-      // Save the moving user's current peer list.
-      previousNearbyUsers.set(avatar.userId, currentIds);
-
-      // Update reciprocal proximity state so that the other user's
-      // next movement does not generate a duplicate enter/exit event.
+      // Seed peer positions and profiles for nearby users
       for (const peer of peers) {
-        const peerIds = new Set(
-          previousNearbyUsers.get(peer.userId) || []
-        );
-
-        peerIds.add(avatar.userId);
-        previousNearbyUsers.set(peer.userId, [...peerIds]);
+        if (Array.isArray(peer.position) && !proximityState.positions.has(peer.userId)) {
+          proximityState.positions.set(peer.userId, [...peer.position]);
+        }
+        userProfiles.set(peer.userId, {
+          username: peer.username,
+          position: peer.position,
+        });
       }
 
-      for (const peerId of exited) {
-        const peerIds = new Set(
-          previousNearbyUsers.get(peerId) || []
-        );
-
-        peerIds.delete(avatar.userId);
-        previousNearbyUsers.set(peerId, [...peerIds]);
-      }
+      // Update pair proximity state and emit transitions
+      const events = proximityState.updatePosition(avatar.userId, position);
+      notifyProximityEvents(events, socket);
 
       // Send the optimized proximity result to Member 1.
       socket.emit("proximity:peers:update", {
@@ -937,54 +1053,6 @@ io.on("connection", (socket) => {
         `Proximity query: ${result.queryTimeMs} ms, ` +
         `${result.count} nearby users for ${avatar.userId}`
       );
-
-      // Notify both sides when a peer enters earshot.
-      for (const peer of entered) {
-        const eventData = {
-          userId: avatar.userId,
-          peer: {
-            userId: peer.userId,
-            username: peer.username,
-            position: peer.position,
-            distance: peer.distance,
-          },
-        };
-
-        socket.emit("proximity:peer:entered", eventData);
-
-        const peerSocketId = userSockets.get(peer.userId);
-
-        if (peerSocketId) {
-          io.to(peerSocketId).emit("proximity:peer:entered", {
-            userId: peer.userId,
-            peer: {
-              userId: avatar.userId,
-              username: avatar.username,
-              position: avatar.position,
-              distance: peer.distance,
-            },
-          });
-        }
-      }
-
-      // Notify both sides when a peer leaves earshot.
-      for (const peerId of exited) {
-        const eventData = {
-          userId: avatar.userId,
-          peerUserId: peerId,
-        };
-
-        socket.emit("proximity:peer:left", eventData);
-
-        const peerSocketId = userSockets.get(peerId);
-
-        if (peerSocketId) {
-          io.to(peerSocketId).emit("proximity:peer:left", {
-            userId: peerId,
-            peerUserId: avatar.userId,
-          });
-        }
-      }
 
       // Broadcast the movement to connected clients.
       socket.broadcast.emit("avatar:moved", {
@@ -1002,8 +1070,12 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     console.log("Socket disconnected:", socket.id);
-    if (socket.data?.userId && userSockets.get(socket.data.userId) === socket.id) {
-      userSockets.delete(socket.data.userId);
+    const userId = socket.data?.userId;
+    if (userId && userSockets.get(userId) === socket.id) {
+      const events = proximityState.removeUser(userId);
+      notifyProximityEvents(events);
+      userSockets.delete(userId);
+      userProfiles.delete(userId);
     }
   });
 });
@@ -1018,5 +1090,8 @@ module.exports = {
   io,
   previousNearbyUsers,
   userSockets,
+  userProfiles,
+  proximityState,
+  notifyProximityEvents,
   startServer,
 };
