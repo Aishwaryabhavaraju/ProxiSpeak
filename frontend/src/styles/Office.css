@@ -1,0 +1,105 @@
+.office-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+.office-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 20px;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+}
+
+.office-main-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  padding: 16px 20px;
+  max-width: 1440px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.canvas-stage-card {
+  display: flex;
+  flex-direction: column;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 14px;
+  padding: 14px;
+  overflow: hidden;
+}
+
+.canvas-wrapper {
+  position: relative;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #0f172a;
+  border-radius: 10px;
+  padding: 8px;
+}
+
+.office-canvas {
+  width: 100%;
+  max-width: 760px;
+  height: auto;
+  border: 2px solid #334155;
+  border-radius: 8px;
+  cursor: crosshair;
+  display: block;
+}
+
+.office-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sidebar-panel {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.sidebar-panel h3 {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #38bdf8;
+  margin-bottom: 12px;
+}
+
+.user-list-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.user-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  font-size: 13px;
+}
+
+@media (max-width: 960px) {
+  .office-main-grid {
+    grid-template-columns: 1fr;
+  }
+}
