@@ -3,13 +3,20 @@
  * Formula: gain = max(0, 1 - distance / maxDistance)
  */
 export function calculateVolume(distance, maxDistance = 100) {
-  if (typeof distance !== "number" || Number.isNaN(distance) || maxDistance <= 0) {
+  if (
+    typeof distance !== "number" ||
+    Number.isNaN(distance) ||
+    typeof maxDistance !== "number" ||
+    Number.isNaN(maxDistance) ||
+    maxDistance <= 0
+  ) {
     return 0;
   }
   if (distance >= maxDistance) {
     return 0;
   }
-  const rawGain = 1 - distance / maxDistance;
+  const safeDistance = Math.max(0, distance);
+  const rawGain = 1 - safeDistance / maxDistance;
   return Math.max(0, Math.min(1, rawGain));
 }
 
@@ -22,6 +29,10 @@ export function calculatePan(localUser, remoteUser, maxDistance = 100) {
     !remoteUser ||
     typeof localUser.x !== "number" ||
     typeof remoteUser.x !== "number" ||
+    Number.isNaN(localUser.x) ||
+    Number.isNaN(remoteUser.x) ||
+    typeof maxDistance !== "number" ||
+    Number.isNaN(maxDistance) ||
     maxDistance <= 0
   ) {
     return 0;

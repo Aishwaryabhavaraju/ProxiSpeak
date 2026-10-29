@@ -21,11 +21,18 @@ export function useMicrophone({ onMuteChanged } = {}) {
     }
 
     try {
+      if (streamRef.current) {
+        for (const track of streamRef.current.getTracks()) {
+          track.stop();
+        }
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
-          noiseSuppression: true,
+          noiseSuppression: false, // Prevents aggressive gating that cuts off speech mid-sentence
           autoGainControl: true,
+          channelCount: 1, // Standard mono prevents stereo phase-cancellation hollow voice
         },
         video: false,
       });
@@ -39,11 +46,20 @@ export function useMicrophone({ onMuteChanged } = {}) {
     } catch (err) {
       setPermissionState("denied");
       setMicEnabled(false);
-      setMicError(
-        err && err.name === "NotAllowedError"
-          ? "Microphone permission was denied. Enable microphone access in browser settings."
-          : "Could not access a microphone device."
-      );
+      const name = err && err.name ? err.name : "";
+      let message = "Could not access a microphone device.";
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        message = "Microphone access was denied. Please allow microphone permissions in your browser.";
+      } else if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+        message = "No microphone hardware detected on this device.";
+      } else if (name === "NotReadableError" || name === "TrackStartError") {
+        message = "Microphone is already in use by another application or hardware error occurred.";
+      } else if (name === "OverconstrainedError") {
+        message = "Requested microphone audio settings are not supported by your hardware.";
+      } else if (name === "SecurityError") {
+        message = "Microphone access blocked. Media capture requires HTTPS or localhost.";
+      }
+      setMicError(message);
       return false;
     }
   }, [onMuteChanged]);
