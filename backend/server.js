@@ -18,6 +18,14 @@ const {
   ProximityStateManager,
 } = require("./utils/proximityStateManager");
 
+const {
+  initializeRedis,
+  publishMovement,
+  publishProximityTransition,
+  closeRedis,
+  isRedisInitialized,
+} = require("./config/redis");
+
 const proximityState = new ProximityStateManager(100);
 
 const app = express();
@@ -819,6 +827,15 @@ const startServer = async () => {
       console.warn("Avatar index check:", indexError.message);
     }
 
+    if (process.env.REDIS_URL) {
+      try {
+        await initializeRedis(io);
+      } catch (redisError) {
+        console.warn("Redis initialization warning:", redisError.message);
+        console.warn("Continuing in single-instance mode without Redis.");
+      }
+    }
+
     const PORT = process.env.PORT || 5000;
 
     httpServer.listen(PORT, () => {
@@ -975,6 +992,9 @@ io.on("connection", (socket) => {
 
     userSockets.set(normalizedUserId, socket.id);
     socket.data.userId = normalizedUserId;
+    if (typeof socket.join === "function") {
+      socket.join(normalizedUserId);
+    }
 
     try {
       const userDoc = await Avatar.findOne({ userId: normalizedUserId });
@@ -1098,7 +1118,35 @@ io.on("connection", (socket) => {
 
       // Update pair proximity state and emit transitions
       const events = proximityState.updatePosition(avatar.userId, position);
-      notifyProximityEvents(events, socket);
+      if (isRedisInitialized()) {
+        for (const event of events) {
+          try {
+            await publishProximityTransition({
+              type: event.type,
+              userA: event.userA,
+              userB: event.userB,
+              distance: event.distance,
+              reason: event.reason,
+            });
+          } catch (pubErr) {
+            console.error("Failed to publish proximity transition to Redis:", pubErr.message);
+            notifyProximityEvents([event], socket);
+          }
+        }
+      } else {
+        notifyProximityEvents(events, socket);
+      }
+
+      if (isRedisInitialized()) {
+        try {
+          await publishMovement({
+            userId: avatar.userId,
+            position,
+          });
+        } catch (pubErr) {
+          console.error("Failed to publish movement to Redis:", pubErr.message);
+        }
+      }
 
       // Send the optimized proximity result to Member 1.
       socket.emit("proximity:peers:update", {
@@ -1155,4 +1203,9 @@ module.exports = {
   notifyProximityEvents,
   startServer,
   resolveMongoUri,
+  initializeRedis,
+  publishMovement,
+  publishProximityTransition,
+  closeRedis,
+  isRedisInitialized,
 };
