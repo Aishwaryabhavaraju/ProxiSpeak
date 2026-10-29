@@ -31,6 +31,9 @@ function App() {
   const [audioRadius, setAudioRadius] = useState(OFFICE_CONFIG.defaultAudioRadius);
   const [localAutoWalk, setLocalAutoWalk] = useState(false);
   const [remoteAutoWalk, setRemoteAutoWalk] = useState(true);
+  const [roomId, setRoomId] = useState("");
+  const [roomMode, setRoomMode] = useState("");
+  const [roomCopyMessage, setRoomCopyMessage] = useState("");
 
   // Mutable 60fps world state in ref so Canvas & Web Audio run without 60fps React rerenders
   const worldRef = useRef({
@@ -222,6 +225,12 @@ const handleAssignedIdentity = useCallback((identity) => {
     };
   }, [username, micMuted, micEnabled]);
 
+  const handleJoinRoom = (displayName, selectedRoomId, mode) => {
+  setUsername(displayName);
+  setRoomId(selectedRoomId);
+  setRoomMode(mode);
+};
+
   // 60 FPS Physics & Movement Loop (StrictMode-safe: zero side effects inside React state updaters)
   useEffect(() => {
     if (!username) return undefined;
@@ -397,16 +406,45 @@ const handleAssignedIdentity = useCallback((identity) => {
   }
 
   function handleLeaveOffice() {
-    stopMicrophone();
-    setUsername("");
-  }
+  stopMicrophone();
+  setUsername("");
+  setRoomId("");
+  setRoomMode("");
+  setRoomCopyMessage("");
+}
 
   if (!username) {
-    return <Login onJoin={setUsername} />;
-  }
-
+  return <Login onJoin={handleJoinRoom} />;
+}
+  
   return (
     <div className="office-shell">
+      {roomId && (
+        <div className="active-room-banner">
+          <div className="active-room-details">
+            <span className="active-room-label">
+              {roomMode === "create" ? "YOUR ROOM" : "JOINED ROOM"}
+            </span>
+            <code>{roomId}</code>
+          </div>
+
+          <button
+            type="button"
+            className="active-room-copy"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(roomId);
+                setRoomCopyMessage("Copied!");
+              } catch {
+                setRoomCopyMessage("Copy unavailable");
+              }
+            }}
+          >
+            {roomCopyMessage || "Copy room ID"}
+          </button>
+        </div>
+      )}
+
       <OfficeHeader
         username={username}
         localId={uiSnapshot.localUser.id}
