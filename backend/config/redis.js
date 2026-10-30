@@ -18,7 +18,15 @@ async function initializeRedis(io, handlers = {}) {
     throw new Error("REDIS_URL is missing from backend/.env");
   }
 
-  publisher = createClient({ url: process.env.REDIS_URL });
+  const clientOptions = {
+    url: process.env.REDIS_URL,
+    socket: {
+      connectTimeout: 2000,
+      reconnectStrategy: (retries) => (retries > 0 ? false : 200),
+    },
+  };
+
+  publisher = createClient(clientOptions);
   subscriber = publisher.duplicate();
 
   publisher.on("error", (err) =>
@@ -170,4 +178,3 @@ module.exports = {
   closeRedis,
   isRedisInitialized,
 };
-

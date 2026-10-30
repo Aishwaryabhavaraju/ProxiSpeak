@@ -10,13 +10,17 @@
     "test": "node --test test/proximityTracker.test.js test/step3EnterExit.test.js test/fastProximity.test.js test/webrtcRelay.test.js",
     "test:redis": "node scripts/test-redis-scaling.js",
     "benchmark": "node scripts/benchmark-proximity.js",
-    "test:e2e": "node scripts/test-two-browsers.js"
+    "test:e2e": "node scripts/test-two-browsers.js",
+    "loadtest:seed": "node scripts/seed-load-test-users.js",
+    "loadtest": "node scripts/load-test-proximity.js",
+    "loadtest:clean": "node scripts/cleanup-load-test-users.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",
+    "axios": "^1.21.0",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.3",
