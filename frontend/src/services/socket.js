@@ -4,7 +4,7 @@ const SERVER_URL =
   (typeof import.meta !== "undefined" &&
     import.meta.env &&
     import.meta.env.VITE_SOCKET_URL) ||
-  "http://localhost:3000";
+  "http://localhost:5000";
 
 export const socket = io(SERVER_URL, {
   autoConnect: false,

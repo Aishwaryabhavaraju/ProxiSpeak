@@ -4,7 +4,6 @@ logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-<<<<<<< HEAD
 lerna-debug.log*
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
@@ -148,7 +147,6 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
-=======
 pnpm-debug.log*
 lerna-debug.log*
 
@@ -167,4 +165,3 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
->>>>>>> ae8304c ( frontend update  commit)

@@ -18,20 +18,36 @@ async function initializeRedis(io, handlers = {}) {
     throw new Error("REDIS_URL is missing from backend/.env");
   }
 
-  publisher = createClient({ url: process.env.REDIS_URL });
+  const clientOptions = {
+    url: process.env.REDIS_URL,
+    socket: {
+      reconnectStrategy: false,
+      connectTimeout: 1000,
+    },
+  };
+
+  publisher = createClient(clientOptions);
   subscriber = publisher.duplicate();
 
-  publisher.on("error", (err) =>
-    console.error("Redis publisher error:", err.message)
-  );
-  subscriber.on("error", (err) =>
-    console.error("Redis subscriber error:", err.message)
-  );
+  publisher.on("error", (err) => {
+    if (initialized) console.warn("Redis publisher error:", err.message);
+  });
+  subscriber.on("error", (err) => {
+    if (initialized) console.warn("Redis subscriber error:", err.message);
+  });
 
-  await Promise.all([
-    publisher.connect(),
-    subscriber.connect(),
-  ]);
+  try {
+    await Promise.all([
+      publisher.connect(),
+      subscriber.connect(),
+    ]);
+  } catch (connectError) {
+    try { await publisher.disconnect(); } catch (_) {}
+    try { await subscriber.disconnect(); } catch (_) {}
+    publisher = null;
+    subscriber = null;
+    throw new Error(`Could not connect to Redis at ${process.env.REDIS_URL} (${connectError.message})`);
+  }
 
   // Enable cross-instance Socket.IO broadcasts.
   io.adapter(createAdapter(publisher, subscriber));
@@ -40,17 +56,25 @@ async function initializeRedis(io, handlers = {}) {
   eventPublisher = publisher.duplicate();
   eventSubscriber = publisher.duplicate();
 
-  eventPublisher.on("error", (err) =>
-    console.error("Redis event publisher error:", err.message)
-  );
-  eventSubscriber.on("error", (err) =>
-    console.error("Redis event subscriber error:", err.message)
-  );
+  eventPublisher.on("error", (err) => {
+    if (initialized) console.warn("Redis event publisher error:", err.message);
+  });
+  eventSubscriber.on("error", (err) => {
+    if (initialized) console.warn("Redis event subscriber error:", err.message);
+  });
 
-  await Promise.all([
-    eventPublisher.connect(),
-    eventSubscriber.connect(),
-  ]);
+  try {
+    await Promise.all([
+      eventPublisher.connect(),
+      eventSubscriber.connect(),
+    ]);
+  } catch (err) {
+    try { await eventPublisher.disconnect(); } catch (_) {}
+    try { await eventSubscriber.disconnect(); } catch (_) {}
+    eventPublisher = null;
+    eventSubscriber = null;
+    throw err;
+  }
 
   await eventSubscriber.subscribe(
     MOVEMENT_CHANNEL,
@@ -170,4 +194,3 @@ module.exports = {
   closeRedis,
   isRedisInitialized,
 };
-

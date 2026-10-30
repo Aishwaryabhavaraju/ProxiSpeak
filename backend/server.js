@@ -6,6 +6,10 @@ const cors = require("cors");
 const connectDB = require("./config/db");
 const { resolveMongoUri } = require("./config/db");
 const Avatar = require("./models/Avatar");
+const mongoose = require("mongoose");
+const { randomUUID } = require("crypto");
+const { authRouter } = require("./routes/authRoutes");
+const roomRouter = require("./routes/roomRoutes");
 const http = require("http");
 const { Server } = require("socket.io");
 const { calculateDistance } = require("./utils/proximity");
@@ -42,6 +46,10 @@ const io = new Server(httpServer, {
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Authentication and Room API routes
+app.use("/api/auth", authRouter);
+app.use("/api/rooms", roomRouter);
 
 // Catch malformed JSON errors gracefully and return JSON instead of HTML
 app.use((err, req, res, next) => {
@@ -874,6 +882,46 @@ previousNearbyUsers.clear = function () {
 // Stores user metadata (username, position) for event payloads.
 const userProfiles = new Map();
 
+// Room state tracking for virtual workspaces
+const socketRooms = new Map(); // socketId -> roomId
+const roomMembers = new Map(); // roomId -> Map<socketId, userState>
+
+function getRoomUsers(roomId) {
+  const members = roomMembers.get(roomId);
+  if (!members) return [];
+  return Array.from(members.values());
+}
+
+function removeSocketFromRoom(socket) {
+  const roomId = socketRooms.get(socket.id);
+  if (!roomId) return null;
+
+  socketRooms.delete(socket.id);
+  const members = roomMembers.get(roomId);
+  let removedUser = null;
+
+  if (members) {
+    removedUser = members.get(socket.id);
+    members.delete(socket.id);
+    if (members.size === 0) {
+      roomMembers.delete(roomId);
+    }
+  }
+
+  if (typeof socket.leave === "function") {
+    socket.leave(roomId);
+  }
+
+  if (removedUser) {
+    socket.to(roomId).emit("user-left", {
+      id: socket.id,
+      userId: removedUser.userId || socket.id,
+    });
+  }
+
+  return { roomId, user: removedUser };
+}
+
 /**
  * Helper to dispatch proximity enter/exit events to connected users.
  * Matches Member 1's signaling implementation.
@@ -997,7 +1045,9 @@ io.on("connection", (socket) => {
     }
 
     try {
-      const userDoc = await Avatar.findOne({ userId: normalizedUserId });
+      const userDoc = (mongoose.connection && mongoose.connection.readyState === 1)
+        ? await Avatar.findOne({ userId: normalizedUserId })
+        : null;
       if (userDoc) {
         userProfiles.set(normalizedUserId, {
           username: userDoc.username,
@@ -1051,6 +1101,235 @@ io.on("connection", (socket) => {
   relayWebRTCSignal(socket, "webrtc:offer");
   relayWebRTCSignal(socket, "webrtc:answer");
   relayWebRTCSignal(socket, "webrtc:ice-candidate");
+
+  // WebRTC signaling for frontend client
+  socket.on("webrtc-offer", (data = {}) => {
+    const { targetId, sdp } = data;
+    if (targetId && sdp) {
+      const targetSocketId = userSockets.get(targetId) || targetId;
+      io.to(targetSocketId).emit("webrtc-offer", {
+        fromId: socket.id,
+        senderUserId: socket.data.userId,
+        sdp,
+      });
+    }
+  });
+
+  socket.on("webrtc-answer", (data = {}) => {
+    const { targetId, sdp } = data;
+    if (targetId && sdp) {
+      const targetSocketId = userSockets.get(targetId) || targetId;
+      io.to(targetSocketId).emit("webrtc-answer", {
+        fromId: socket.id,
+        senderUserId: socket.data.userId,
+        sdp,
+      });
+    }
+  });
+
+  socket.on("webrtc-ice-candidate", (data = {}) => {
+    const { targetId, candidate } = data;
+    if (targetId && candidate) {
+      const targetSocketId = userSockets.get(targetId) || targetId;
+      io.to(targetSocketId).emit("webrtc-ice-candidate", {
+        fromId: socket.id,
+        senderUserId: socket.data.userId,
+        candidate,
+      });
+    }
+  });
+
+  const handleJoinOffice = async (data = {}) => {
+    const rawUsername = data.username || data.name || "Anonymous";
+    const rawUserId = data.userId || rawUsername;
+    const cleanUserId = String(rawUserId).trim();
+    const cleanUsername = String(rawUsername).trim();
+    const roomId = String(data.roomId || "MAIN-OFFICE").trim().toUpperCase();
+    const muted = Boolean(data.muted);
+    const color = data.color || data.avatarColor || "#818CF8";
+    const x = Number.isFinite(Number(data.x)) ? Number(data.x) : 260 + Math.floor(Math.random() * 80);
+    const y = Number.isFinite(Number(data.y)) ? Number(data.y) : 220 + Math.floor(Math.random() * 60);
+
+    removeSocketFromRoom(socket);
+
+    socket.data.userId = cleanUserId;
+    socket.data.username = cleanUsername;
+    socket.data.roomId = roomId;
+
+    if (typeof socket.join === "function") {
+      socket.join(roomId);
+      socket.join(cleanUserId);
+    }
+
+    userSockets.set(cleanUserId, socket.id);
+    socketRooms.set(socket.id, roomId);
+
+    const userState = {
+      id: socket.id,
+      userId: cleanUserId,
+      username: cleanUsername,
+      name: cleanUsername,
+      x,
+      y,
+      direction: 0,
+      muted,
+      color,
+      roomId,
+    };
+
+    if (!roomMembers.has(roomId)) {
+      roomMembers.set(roomId, new Map());
+    }
+    roomMembers.get(roomId).set(socket.id, userState);
+
+    userProfiles.set(cleanUserId, {
+      username: cleanUsername,
+      position: [x, y],
+    });
+    proximityState.positions.set(cleanUserId, [x, y]);
+
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      try {
+        await Avatar.findOneAndUpdate(
+          { userId: cleanUserId },
+          {
+            $set: {
+              userId: cleanUserId,
+              username: cleanUsername,
+              position: [x, y],
+              isOnline: true,
+            },
+          },
+          { upsert: true, new: true }
+        );
+      } catch (e) {
+        console.warn("Avatar sync on join:", e.message);
+      }
+    }
+
+    socket.emit("session-confirmed", userState);
+    socket.emit("avatar:registered", { success: true, userId: cleanUserId });
+
+    const currentUsers = getRoomUsers(roomId);
+    socket.emit("users-update", currentUsers);
+
+    socket.to(roomId).emit("user-joined", userState);
+    socket.to(roomId).emit("peer:joined", {
+      userId: cleanUserId,
+      username: cleanUsername,
+      position: [x, y],
+    });
+  };
+
+  socket.on("join-office", handleJoinOffice);
+  socket.on("join-room", handleJoinOffice);
+
+  socket.on("position-update", async (data = {}) => {
+    try {
+      const roomId = socketRooms.get(socket.id);
+      if (!roomId) return;
+
+      const members = roomMembers.get(roomId);
+      if (!members || !members.has(socket.id)) return;
+
+      const userState = members.get(socket.id);
+      const x = Number(data.x);
+      const y = Number(data.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+      userState.x = x;
+      userState.y = y;
+      if (data.direction !== undefined) userState.direction = data.direction;
+      if (data.muted !== undefined) userState.muted = Boolean(data.muted);
+
+      const position = [x, y];
+      userProfiles.set(userState.userId, {
+        username: userState.username,
+        position,
+      });
+
+      socket.to(roomId).emit("user-moved", {
+        id: socket.id,
+        userId: userState.userId,
+        x,
+        y,
+        direction: userState.direction,
+        muted: userState.muted,
+      });
+
+      socket.to(roomId).emit("avatar:moved", {
+        userId: userState.userId,
+        position,
+      });
+
+      const events = proximityState.updatePosition(userState.userId, position);
+      if (events && events.length > 0) {
+        notifyProximityEvents(events, socket);
+      }
+
+      if (mongoose.connection && mongoose.connection.readyState === 1) {
+        Avatar.updateOne(
+          { userId: userState.userId },
+          { $set: { position, isOnline: true } }
+        ).catch(() => {});
+      }
+    } catch (err) {
+      console.error("position-update error:", err.message);
+    }
+  });
+
+  socket.on("mute-status", (data = {}) => {
+    const roomId = socketRooms.get(socket.id);
+    if (!roomId) return;
+    const members = roomMembers.get(roomId);
+    if (!members || !members.has(socket.id)) return;
+
+    const userState = members.get(socket.id);
+    userState.muted = Boolean(data.muted);
+
+    socket.to(roomId).emit("user-moved", {
+      id: socket.id,
+      userId: userState.userId,
+      x: userState.x,
+      y: userState.y,
+      direction: userState.direction,
+      muted: userState.muted,
+    });
+  });
+
+  socket.on("chat:message", (data = {}) => {
+    const roomId = data.roomId || socketRooms.get(socket.id);
+    const text = String(data.text || data.message || "").trim();
+    if (!roomId || !text) return;
+
+    const members = roomMembers.get(roomId);
+    const sender = members?.get(socket.id);
+    const username = data.username || sender?.username || "Anonymous";
+
+    const chatPayload = {
+      id: randomUUID(),
+      roomId,
+      senderId: socket.id,
+      userId: sender?.userId || socket.id,
+      username,
+      color: sender?.color || "#818CF8",
+      text,
+      timestamp: new Date().toISOString(),
+    };
+
+    io.to(roomId).emit("chat:message", chatPayload);
+  });
+
+  const handleLeaveOffice = () => {
+    const removed = removeSocketFromRoom(socket);
+    if (removed && removed.user) {
+      const events = proximityState.removeUser(removed.user.userId);
+      notifyProximityEvents(events);
+    }
+  };
+
+  socket.on("leave-office", handleLeaveOffice);
+  socket.on("leave-room", handleLeaveOffice);
 
   socket.on("avatar:move", async (data) => {
     try {
@@ -1178,7 +1457,8 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     console.log("Socket disconnected:", socket.id);
-    const userId = socket.data?.userId;
+    const removed = removeSocketFromRoom(socket);
+    const userId = socket.data?.userId || removed?.user?.userId;
     if (userId && userSockets.get(userId) === socket.id) {
       const events = proximityState.removeUser(userId);
       notifyProximityEvents(events);
@@ -1199,6 +1479,9 @@ module.exports = {
   previousNearbyUsers,
   userSockets,
   userProfiles,
+  socketRooms,
+  roomMembers,
+  getRoomUsers,
   proximityState,
   notifyProximityEvents,
   startServer,

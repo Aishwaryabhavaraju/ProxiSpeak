@@ -4,14 +4,18 @@ import { webrtcManager } from "../services/webrtc";
 
 export function useSocket({
   username,
+  userId,
+  roomId,
+  color,
   localMuted,
   onAssignedIdentity,
   onRemoteUsersSync,
   onRemoteUserMoved,
   onUserJoined,
   onUserLeft,
+  onChatMessage,
 }) {
-  const [connectionState, setConnectionState] = useState("simulation");
+  const [connectionState, setConnectionState] = useState("disconnected");
   const [serverError, setServerError] = useState("");
   const lastEmitRef = useRef(0);
 
@@ -19,8 +23,19 @@ export function useSocket({
     if (!username) return;
     setConnectionState("connecting");
     setServerError("");
-    socket.connect();
-  }, [username]);
+    if (!socket.connected) {
+      socket.connect();
+    } else {
+      // Re-emit join if already connected
+      socket.emit("join-office", {
+        username,
+        userId: userId || username,
+        roomId: roomId || "MAIN-OFFICE",
+        color: color || "#818CF8",
+        muted: Boolean(localMuted),
+      });
+    }
+  }, [username, userId, roomId, color, localMuted]);
 
   const switchToSimulation = useCallback(() => {
     if (socket.connected) {
@@ -29,6 +44,13 @@ export function useSocket({
     webrtcManager.closeAll();
     setConnectionState("simulation");
     setServerError("");
+  }, []);
+
+  const leaveOffice = useCallback(() => {
+    if (socket.connected) {
+      socket.emit("leave-office");
+    }
+    webrtcManager.closeAll();
   }, []);
 
   const trailingTimerRef = useRef(null);
@@ -72,6 +94,19 @@ export function useSocket({
     }
   }, []);
 
+  const sendChatMessage = useCallback(
+    (text) => {
+      if (socket.connected && text && text.trim()) {
+        socket.emit("chat:message", {
+          roomId: roomId || "MAIN-OFFICE",
+          text: text.trim(),
+          username,
+        });
+      }
+    },
+    [roomId, username]
+  );
+
   useEffect(() => {
     if (!username) return undefined;
 
@@ -83,7 +118,13 @@ export function useSocket({
       if (onAssignedIdentity) {
         onAssignedIdentity({ id: socket.id });
       }
-      socket.emit("join-office", { username, muted: Boolean(localMuted) });
+      socket.emit("join-office", {
+        username,
+        userId: userId || username,
+        roomId: roomId || "MAIN-OFFICE",
+        color: color || "#818CF8",
+        muted: Boolean(localMuted),
+      });
     }
 
     function handleSessionConfirmed(me) {
@@ -129,6 +170,12 @@ export function useSocket({
       }
     }
 
+    function handleChatMessage(msg) {
+      if (msg && onChatMessage) {
+        onChatMessage(msg);
+      }
+    }
+
     socket.on("connect", handleConnect);
     socket.on("session-confirmed", handleSessionConfirmed);
     socket.on("connect_error", handleConnectError);
@@ -137,9 +184,14 @@ export function useSocket({
     socket.on("user-moved", handleUserMoved);
     socket.on("user-joined", handleUserJoined);
     socket.on("user-left", handleUserLeft);
+    socket.on("chat:message", handleChatMessage);
     socket.on("webrtc-offer", (data) => webrtcManager.handleIncomingOffer(data));
     socket.on("webrtc-answer", (data) => webrtcManager.handleIncomingAnswer(data));
     socket.on("webrtc-ice-candidate", (data) => webrtcManager.handleIncomingIceCandidate(data));
+
+    if (socket.connected) {
+      handleConnect();
+    }
 
     return () => {
       socket.off("connect", handleConnect);
@@ -150,13 +202,14 @@ export function useSocket({
       socket.off("user-moved", handleUserMoved);
       socket.off("user-joined", handleUserJoined);
       socket.off("user-left", handleUserLeft);
+      socket.off("chat:message", handleChatMessage);
       socket.off("webrtc-offer");
       socket.off("webrtc-answer");
       socket.off("webrtc-ice-candidate");
       socket.disconnect();
       webrtcManager.closeAll();
     };
-  }, [username]);
+  }, [username, userId, roomId, color]);
 
   return {
     connectionState,
@@ -164,7 +217,9 @@ export function useSocket({
     serverUrl: getConfiguredServerUrl(),
     connectToBackend,
     switchToSimulation,
+    leaveOffice,
     emitPositionUpdate,
     emitMuteStatus,
+    sendChatMessage,
   };
 }

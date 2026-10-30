@@ -1,0 +1,199 @@
+/* ProxiSpeak - User List Panel Styling */
+.userlist-panel {
+  display: flex;
+  flex-direction: column;
+  background: #1F2937;
+  border-radius: 10px;
+  overflow: hidden;
+  height: 280px;
+}
+
+.userlist-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #273449;
+  border-bottom: 1px solid #374151;
+}
+
+.userlist-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.userlist-icon {
+  color: #5EEAD4;
+}
+
+.userlist-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #F3F4F6;
+  margin: 0;
+}
+
+.userlist-count-badge {
+  font-size: 11px;
+  color: #9CA3AF;
+  background: #111827;
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid #374151;
+}
+
+.userlist-items {
+  flex: 1;
+  padding: 10px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.user-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: #273449;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  transition: all 0.15s ease;
+}
+
+.user-card.local {
+  background: #1E293B;
+  border-color: rgba(129, 140, 248, 0.4);
+}
+
+.user-card-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-badge-initial {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #111827;
+  font-weight: 700;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.user-card-names {
+  display: flex;
+  flex-direction: column;
+}
+
+.user-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #F3F4F6;
+  line-height: 1.2;
+}
+
+.user-you-tag {
+  color: #818CF8;
+  font-size: 11px;
+}
+
+.user-card-sub {
+  font-size: 11px;
+  color: #64748B;
+}
+
+.user-dist-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.user-dist-px {
+  color: #9CA3AF;
+}
+
+.user-vol-pct {
+  color: #5EEAD4;
+  font-weight: 600;
+}
+
+.user-card-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Proximity Badges */
+.user-prox-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.user-prox-badge.in-earshot {
+  background: rgba(94, 234, 212, 0.15);
+  color: #5EEAD4;
+  border: 1px solid rgba(94, 234, 212, 0.35);
+}
+
+.user-prox-badge.approaching {
+  background: rgba(251, 191, 36, 0.15);
+  color: #FBBF24;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+}
+
+.user-prox-badge.out {
+  background: rgba(100, 116, 139, 0.15);
+  color: #94A3B8;
+  border: 1px solid #374151;
+}
+
+.user-mic-pill {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.user-mic-pill.active {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10B981;
+}
+
+.user-mic-pill.muted {
+  background: rgba(239, 68, 68, 0.15);
+  color: #EF4444;
+}
+
+.userlist-empty {
+  margin: auto;
+  text-align: center;
+  color: #64748B;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.userlist-empty p {
+  margin: 0;
+  color: #9CA3AF;
+}
+
+.userlist-empty span {
+  font-size: 11px;
+}
+

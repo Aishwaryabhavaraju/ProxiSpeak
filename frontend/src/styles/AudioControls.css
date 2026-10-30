@@ -1,0 +1,166 @@
+/* ProxiSpeak - Audio Controls Styling */
+.audio-panel {
+  background: #1F2937;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #374151;
+}
+
+.audio-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #273449;
+  border-bottom: 1px solid #374151;
+}
+
+.audio-panel-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audio-panel-icon {
+  color: #5EEAD4;
+}
+
+.audio-panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #F3F4F6;
+  margin: 0;
+}
+
+.audio-status-tag {
+  font-size: 10px;
+  font-weight: 600;
+  color: #818CF8;
+  background: rgba(129, 140, 248, 0.12);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(129, 140, 248, 0.25);
+}
+
+.audio-panel-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.audio-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid #374151;
+}
+
+.audio-btn-enable {
+  background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+  color: #FFFFFF;
+  border: none;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.25);
+}
+
+.audio-btn-enable:hover {
+  opacity: 0.94;
+}
+
+.audio-btn-active {
+  background: #273449;
+  color: #5EEAD4;
+  border-color: rgba(94, 234, 212, 0.4);
+}
+
+.audio-btn-active:hover {
+  background: rgba(94, 234, 212, 0.1);
+}
+
+.audio-btn-muted {
+  background: rgba(239, 68, 68, 0.12);
+  color: #FCA5A5;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.audio-btn-muted:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.audio-btn-speaker {
+  background: #273449;
+  color: #F3F4F6;
+}
+
+.audio-btn-speaker:hover {
+  background: #374151;
+}
+
+.audio-btn-deafened {
+  background: rgba(239, 68, 68, 0.12);
+  color: #FCA5A5;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.audio-slider-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+  background: #111827;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #374151;
+}
+
+.audio-slider-labels {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.audio-slider-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #9CA3AF;
+  font-weight: 600;
+}
+
+.audio-radius-badge {
+  color: #5EEAD4;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+.audio-range-input {
+  width: 100%;
+  accent-color: #5EEAD4;
+  cursor: pointer;
+  margin: 4px 0;
+}
+
+.audio-slider-sub {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #64748B;
+}
+
+.audio-error-banner {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #FCA5A5;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+

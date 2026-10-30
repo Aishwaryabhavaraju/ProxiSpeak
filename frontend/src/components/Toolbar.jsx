@@ -1,44 +1,34 @@
 import React from "react";
+import { Navigation, Footprints, MousePointer } from "lucide-react";
 import "../styles/Toolbar.css";
 
-function Toolbar({
+export default function Toolbar({
   localAutoWalk,
-  remoteAutoWalk,
-  connectionState,
   onToggleLocalAutoWalk,
-  onToggleRemoteAutoWalk,
-  onAddMockUser,
 }) {
   return (
-    <div className="toolbar-bar">
-      <div className="toolbar-group">
+    <div className="office-toolbar">
+      <div className="office-toolbar-controls">
         <button
           type="button"
-          className={`toolbar-btn ${localAutoWalk ? "active" : ""}`}
+          className={`toolbar-mode-btn ${localAutoWalk ? "active" : ""}`}
           onClick={onToggleLocalAutoWalk}
         >
-          {localAutoWalk ? "Your Avatar: Auto-Walk ON" : "Your Avatar: Manual (WASD / Click)"}
+          <Footprints size={15} />
+          <span>{localAutoWalk ? "Auto-Walk: ON" : "Auto-Walk: OFF"}</span>
         </button>
-        {connectionState === "simulation" && (
-          <>
-            <button
-              type="button"
-              className={`toolbar-btn ${remoteAutoWalk ? "active" : ""}`}
-              onClick={onToggleRemoteAutoWalk}
-            >
-              {remoteAutoWalk ? "Bots: Autonomous Walk ON" : "Bots: Paused"}
-            </button>
-            <button type="button" className="toolbar-btn" onClick={onAddMockUser}>
-              + Add Bot Colleague
-            </button>
-          </>
-        )}
       </div>
-      <div style={{ fontSize: "12px", color: "#94a3b8" }}>
-        Hold WASD / Arrow keys for smooth sliding movement, or click any floor tile.
+
+      <div className="office-toolbar-tips">
+        <div className="toolbar-tip-item">
+          <MousePointer size={14} className="toolbar-tip-icon" />
+          <span>Click canvas or use <strong>WASD / Arrow Keys</strong> to move</span>
+        </div>
+        <div className="toolbar-tip-item">
+          <Navigation size={14} className="toolbar-tip-icon teal" />
+          <span>Move within <strong>100px</strong> of colleagues for voice earshot</span>
+        </div>
       </div>
     </div>
   );
 }
-
-export default Toolbar;

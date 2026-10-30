@@ -1,48 +1,72 @@
-.toolbar-bar {
+/* ProxiSpeak - Toolbar Styling */
+.office-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 12px;
   margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #334155;
+  padding: 10px 14px;
+  background: #1F2937;
+  border: 1px solid #374151;
+  border-radius: 8px;
 }
 
-.toolbar-group {
+.office-toolbar-controls {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 8px;
 }
 
-.toolbar-btn {
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid #475569;
-  background: #0f172a;
-  color: #f8fafc;
-  font-size: 13px;
+.toolbar-mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #374151;
+  background: #273449;
+  color: #9CA3AF;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
-.toolbar-btn:hover {
-  border-color: #38bdf8;
+.toolbar-mode-btn:hover {
+  border-color: #818CF8;
+  color: #F3F4F6;
 }
 
-.toolbar-btn.active {
-  background: rgba(56, 189, 248, 0.16);
-  border-color: #38bdf8;
-  color: #38bdf8;
+.toolbar-mode-btn.active {
+  background: rgba(129, 140, 248, 0.15);
+  border-color: #818CF8;
+  color: #818CF8;
 }
 
-.toolbar-btn.danger {
-  border-color: rgba(239, 68, 68, 0.5);
-  color: #fca5a5;
+.office-toolbar-tips {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
-.toolbar-btn.danger:hover {
-  background: rgba(239, 68, 68, 0.15);
+.toolbar-tip-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #9CA3AF;
+}
+
+.toolbar-tip-item strong {
+  color: #F3F4F6;
+}
+
+.toolbar-tip-icon {
+  color: #818CF8;
+}
+
+.toolbar-tip-icon.teal {
+  color: #5EEAD4;
 }
