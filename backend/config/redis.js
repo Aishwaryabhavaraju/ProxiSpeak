@@ -29,10 +29,10 @@ async function initializeRedis(io, handlers = {}) {
   publisher = createClient(clientOptions);
   subscriber = publisher.duplicate();
 
-  publisher.on("error", (err) =>
+  publisher.on("error", (err) => initialized &&
     console.error("Redis publisher error:", err.message)
   );
-  subscriber.on("error", (err) =>
+  subscriber.on("error", (err) => initialized &&
     console.error("Redis subscriber error:", err.message)
   );
 
@@ -48,10 +48,10 @@ async function initializeRedis(io, handlers = {}) {
   eventPublisher = publisher.duplicate();
   eventSubscriber = publisher.duplicate();
 
-  eventPublisher.on("error", (err) =>
+  eventPublisher.on("error", (err) => initialized &&
     console.error("Redis event publisher error:", err.message)
   );
-  eventSubscriber.on("error", (err) =>
+  eventSubscriber.on("error", (err) => initialized &&
     console.error("Redis event subscriber error:", err.message)
   );
 

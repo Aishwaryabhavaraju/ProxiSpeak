@@ -4,6 +4,7 @@ require("dotenv").config({ path: path.resolve(__dirname, ".env") });
 const express = require("express");
 const cors = require("cors");
 const connectDB = require("./config/db");
+const mongoose = require("mongoose");
 const Avatar = require("./models/Avatar");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -25,6 +26,10 @@ const {
   isRedisInitialized,
 } = require("./config/redis");
 
+const {
+  createAudioRoutingService,
+} = require("./services/audioRoutingService");
+
 const proximityState = new ProximityStateManager(100);
 
 const app = express();
@@ -37,6 +42,8 @@ const io = new Server(httpServer, {
     methods: ["GET", "POST", "PATCH"],
   },
 });
+
+const audioRouter = createAudioRoutingService(io);
 
 app.use(cors());
 app.use(express.json());
@@ -937,7 +944,9 @@ io.on("connection", (socket) => {
     }
 
     try {
-      const userDoc = await Avatar.findOne({ userId: normalizedUserId });
+      const userDoc = (mongoose.connection && mongoose.connection.readyState === 1)
+        ? await Avatar.findOne({ userId: normalizedUserId })
+        : null;
       if (userDoc) {
         userProfiles.set(normalizedUserId, {
           username: userDoc.username,
@@ -1028,6 +1037,14 @@ io.on("connection", (socket) => {
         return socket.emit("movement:error", {
           message: "Avatar not found.",
         });
+      }
+
+      // Send nearby peer information to the audio-routing signaling layer.
+      const activeUserId = socket.data?.userId || avatar.userId;
+      try {
+        await audioRouter.updateNearbyPeers(activeUserId, position);
+      } catch (routingErr) {
+        console.error("Audio routing error in avatar:move:", routingErr.message);
       }
 
       userProfiles.set(avatar.userId, {
@@ -1125,6 +1142,11 @@ io.on("connection", (socket) => {
       userSockets.delete(userId);
       userProfiles.delete(userId);
     }
+    if (userId) {
+      audioRouter.removeUser(userId).catch((routingErr) => {
+        console.error("Audio routing error on disconnect:", routingErr.message);
+      });
+    }
   });
 });
 
@@ -1142,6 +1164,7 @@ module.exports = {
   proximityState,
   notifyProximityEvents,
   startServer,
+  audioRouter,
   initializeRedis,
   publishMovement,
   publishProximityTransition,
