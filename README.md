@@ -9,6 +9,7 @@
 
 - [Overview](#overview)
 - [Key Features](#key-features)
+- [What Has Been Built (Complete Project Scope)](#what-has-been-built-complete-project-scope)
 - [Architecture & Audio Pipeline](#architecture--audio-pipeline)
 - [Project Structure](#project-structure)
 - [Prerequisites](#prerequisites)
@@ -44,6 +45,43 @@
 - **Real-Time Telemetry & Diagnostics**: In-app developer panel displaying live metrics from `RTCPeerConnection.getStats()`: RTT, jitter, packet loss, incoming bitrate, jitter buffer delay, codec, and candidate connection types.
 - **In-Office Team Chat**: Integrated text messaging with unread badge counters and persistent room history.
 - **Graceful Resilience**: In-memory signaling fallback when MongoDB is offline, automatic AudioContext unlock/resume, and Chromium keep-alive pipelines.
+
+---
+
+## What Has Been Built (Complete Project Scope)
+
+The ProxiSpeak platform consists of 6 integrated engineering modules:
+
+### 1. 3D Web Audio Spatial Engine (`frontend/frontend/src/services/audioEngine.js`)
+- **HRTF Panning**: Transforms 2D canvas coordinates $(x, y)$ into 3D audio listener/source coordinates $(x, 0, z)$ using the Web Audio API's Head-Related Transfer Function.
+- **Individual Per-Peer Graph**: Every connected colleague receives their own isolated pipeline (`MediaStreamAudioSourceNode` → `GainNode` → `PannerNode` → `Destination`). Movement of one user never affects another.
+- **Distance Attenuation**: Implements smooth linear volume rolloff ($gain = \max(0, 1 - distance / radius)$) with cutoff outside the listening radius.
+- **Click & Glitch Free**: Uses 40ms exponential smoothing (`setTargetAtTime`) and avoids scheduling parameter updates when avatars are stationary.
+
+### 2. Enterprise Multi-User WebRTC Engine (`frontend/frontend/src/services/webrtc.js`)
+- **Full-Mesh P2P Audio**: Audio travels directly peer-to-peer with no audio routed through the backend.
+- **W3C Perfect Negotiation**: Polite/impolite glare handling guarantees reliable two-way negotiation even when multiple users join simultaneously.
+- **Zero-Lag Mic Swapping**: Calling `setLocalStream()` switches active microphone tracks across all peers using `replaceTrack()` with 0ms renegotiation overhead.
+- **Opus Codec Optimization**: Injects `usedtx=0;useinbandfec=1;ptime=20;maxaveragebitrate=64000;stereo=0` to guarantee uninterrupted speech without sentence-ending cutoffs.
+
+### 3. Interactive 2D Office Canvas (`frontend/frontend/src/components/OfficeCanvas.jsx`)
+- **60 FPS Rendering Loop**: Renders office floors, conference rooms, desks, chairs, and colored user avatars with smooth interpolation.
+- **Collision Detection (`movement.js`)**: Real-time bounding box collision detection against office walls and furniture.
+- **Flexible Navigation**: Supports keyboard (`WASD`, arrow keys) and mouse click-to-move pathing.
+
+### 4. Signaling & Room Coordination Server (`backend/src/socketServer.js`)
+- **Directed WebRTC Signaling**: Routes SDP offers, answers, and trickle ICE candidates strictly between the intended sender and receiver.
+- **Room State & Presence**: Tracks user coordinates, room membership, and microphone mute status (throttled to 20 Hz).
+- **Dual Persistence Architecture**: Backed by MongoDB atomic models (`Participant`, `Avatar`, `Room`) with seamless fallback to fast in-memory maps if MongoDB is offline.
+
+### 5. Live Telemetry Diagnostics Panel (`frontend/frontend/src/components/AudioDiagnosticsPanel.jsx`)
+- Directly queries browser `RTCPeerConnection.getStats()` every second.
+- Visualizes real RTT latency, jitter, packet loss count, NetEQ jitter buffer delay, incoming bitrate in kbps, negotiated codec, and candidate connection types.
+
+### 6. Office Productivity UI (`frontend/frontend/src/components/`)
+- **Colleague Radar (`UserList.jsx`)**: Live list of people in the room with distances in pixels, earshot badges, and mute indicators.
+- **Team Chat (`TeamChat.jsx`)**: In-room text messaging with unread badge indicators.
+- **Audio Toolbar (`AudioControls.jsx`)**: Instant microphone toggle, speaker deafen, and listening radius slider (50px to 300px).
 
 ---
 
