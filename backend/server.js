@@ -29,6 +29,7 @@ const {
 const {
   createAudioRoutingService,
 } = require("./services/audioRoutingService");
+const officeLayoutRoutes = require("./routes/officeLayoutRoutes");
 
 const proximityState = new ProximityStateManager(100);
 
@@ -48,6 +49,8 @@ const audioRouter = createAudioRoutingService(io);
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+app.use("/api/office-layouts", officeLayoutRoutes);
 
 // Catch malformed JSON errors gracefully and return JSON instead of HTML
 app.use((err, req, res, next) => {
