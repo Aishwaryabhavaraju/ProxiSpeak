@@ -30,6 +30,10 @@ const {
   createAudioRoutingService,
 } = require("./services/audioRoutingService");
 const officeLayoutRoutes = require("./routes/officeLayoutRoutes");
+const OfficeLayout = require("./models/OfficeLayout");
+const {
+  createSpatialAudioService,
+} = require("./services/spatialAudioService");
 
 const proximityState = new ProximityStateManager(100);
 
@@ -45,6 +49,7 @@ const io = new Server(httpServer, {
 });
 
 const audioRouter = createAudioRoutingService(io);
+const spatialAudio = createSpatialAudioService(io);
 
 app.use(cors());
 app.use(express.json());
@@ -931,7 +936,7 @@ function notifyProximityEvents(events, currentSocket = null) {
 io.on("connection", (socket) => {
   console.log("Socket connected:", socket.id);
 
-  socket.on("avatar:register", async ({ userId } = {}) => {
+  socket.on("avatar:register", async ({ userId, roomId } = {}) => {
     if (typeof userId !== "string" || !userId.trim()) {
       return socket.emit("movement:error", {
         message: "A valid userId is required.",
@@ -942,6 +947,9 @@ io.on("connection", (socket) => {
 
     userSockets.set(normalizedUserId, socket.id);
     socket.data.userId = normalizedUserId;
+    if (roomId) {
+      socket.data.roomId = roomId;
+    }
     if (typeof socket.join === "function") {
       socket.join(normalizedUserId);
     }
@@ -1006,7 +1014,10 @@ io.on("connection", (socket) => {
 
   socket.on("avatar:move", async (data) => {
     try {
-      const { userId, x, y } = data || {};
+      const { userId, x, y, roomId } = data || {};
+      if (roomId && socket.data) {
+        socket.data.roomId = roomId;
+      }
 
       if (
         typeof userId !== "string" ||
@@ -1108,6 +1119,32 @@ io.on("connection", (socket) => {
         }
       }
 
+      // Calculate relative positions and audio obstruction if roomId is active
+      const activeRoomId = roomId || socket.data?.roomId;
+      if (activeRoomId) {
+        try {
+          const layout = (mongoose.connection && mongoose.connection.readyState === 1)
+            ? await OfficeLayout.findOne({ roomId: activeRoomId }).select("furniture").lean()
+            : null;
+          if (layout) {
+            const nearbyPeers = peers.map((p) => ({
+              userId: p.userId,
+              x: p.position[0],
+              y: p.position[1],
+            }));
+            spatialAudio.updateSpatialAudio({
+              userId: avatar.userId,
+              roomId: activeRoomId,
+              position: { x: Number(x), y: Number(y) },
+              nearbyPeers,
+              furniture: layout.furniture || [],
+            });
+          }
+        } catch (spatialErr) {
+          console.error("Spatial audio update failed in avatar:move:", spatialErr.message);
+        }
+      }
+
       // Send the optimized proximity result to Member 1.
       socket.emit("proximity:peers:update", {
         userId: avatar.userId,
@@ -1133,6 +1170,71 @@ io.on("connection", (socket) => {
       socket.emit("movement:error", {
         message: "Failed to update movement and proximity.",
       });
+    }
+  });
+
+  socket.on("position-update", async (data) => {
+    try {
+      const userId = socket.data?.userId || data?.userId;
+      const { x, y, roomId } = data || {};
+      if (!userId || !roomId || x === undefined || y === undefined) return;
+      if (socket.data) {
+        socket.data.roomId = roomId;
+      }
+
+      const position = [Number(x), Number(y)];
+
+      // 1. Reuse existing position persistence logic
+      const avatar = (mongoose.connection && mongoose.connection.readyState === 1)
+        ? await Avatar.findOneAndUpdate(
+            { userId: userId.trim() },
+            { $set: { position, isOnline: true } },
+            { new: true, runValidators: true }
+          )
+        : { userId: userId.trim(), position };
+
+      // 2. Geospatial query for nearby peers
+      let nearbyPeers = [];
+      if (mongoose.connection && mongoose.connection.readyState === 1) {
+        const nearbyAvatars = await Avatar.find({
+          userId: { $ne: userId.trim() },
+          isOnline: true,
+          position: {
+            $near: [Number(x), Number(y)],
+            $maxDistance: 100,
+          },
+        })
+          .select("userId username position")
+          .limit(100)
+          .lean();
+
+        nearbyPeers = nearbyAvatars.map((av) => ({
+          userId: av.userId,
+          x: av.position[0],
+          y: av.position[1],
+        }));
+      }
+
+      // 3. Retrieve saved furniture and obstacles
+      const layout = (mongoose.connection && mongoose.connection.readyState === 1)
+        ? await OfficeLayout.findOne({ roomId }).select("furniture").lean()
+        : null;
+
+      if (!layout) {
+        console.warn("Office layout not found:", roomId);
+        return;
+      }
+
+      // 4. Calculate relative positions and audio obstruction
+      spatialAudio.updateSpatialAudio({
+        userId: userId.trim(),
+        roomId,
+        position: { x: Number(x), y: Number(y) },
+        nearbyPeers,
+        furniture: layout.furniture || [],
+      });
+    } catch (error) {
+      console.error("Spatial audio update failed in position-update:", error);
     }
   });
 
@@ -1168,6 +1270,7 @@ module.exports = {
   notifyProximityEvents,
   startServer,
   audioRouter,
+  spatialAudio,
   initializeRedis,
   publishMovement,
   publishProximityTransition,
