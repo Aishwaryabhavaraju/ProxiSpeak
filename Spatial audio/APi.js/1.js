@@ -122,3 +122,54 @@ function createRoomRouter({ express, Room }) {
       if (!ROOM_ID_PATTERN.test(roomId)) {
         return response.status(400).json({ error: "Invalid roomId" });
       }
+
+      const configuration = request.body;
+      if (!validateRoomConfiguration(configuration)) {
+        return response.status(400).json({
+          error:
+            "Room configuration must include positive layout width and height, and furniture and obstacles arrays with valid rectangular entities",
+        });
+      }
+
+      const room = await Room.findOneAndUpdate(
+        { roomId },
+        {
+          $set: {
+            layout: configuration.layout,
+            furniture: configuration.furniture,
+            obstacles: configuration.obstacles,
+          },
+        },
+        {
+          new: true,
+          upsert: true,
+          runValidators: true,
+          setDefaultsOnInsert: true,
+        }
+      )
+        .select("-_id -__v")
+        .lean();
+
+      return response.json(room);
+    })
+  );
+
+  return router;
+}
+
+function mountRoomApi({ app, express, mongoose, path = "/api/rooms" }) {
+  if (!app || typeof app.use !== "function") {
+    throw new TypeError("app is required");
+  }
+
+  const Room = createRoomModel(mongoose);
+  app.use(path, createRoomRouter({ express, Room }));
+  return Room;
+}
+
+module.exports = {
+  createRoomModel,
+  createRoomRouter,
+  mountRoomApi,
+  validateRoomConfiguration,
+};
