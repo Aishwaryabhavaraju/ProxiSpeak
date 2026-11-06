@@ -1,0 +1,26 @@
+{
+  "name": "proxispeak-geospatial-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Avatar location tracking and proximity queries for ProxiSpeak",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mongoose": "^8.9.5",
+    "redis": "^6.3.1",
+    "socket.io": "^4.8.4"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.4"
+  }
+}
