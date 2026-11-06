@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { OFFICE_CONFIG } from "../utils/officeLayout";
 import { CanvasRenderer } from "../utils/CanvasRenderer";
 import { moveAvatar } from "../utils/movementOptimizer";
+import { measureRenderingPerformance } from "../utils/renderPerformanceTest";
 
 /**
  * 60 FPS Virtual Office Canvas with offscreen static caching, dirty checking,
@@ -47,6 +48,23 @@ function OfficeCanvas({
       rendererRef.current = null;
     };
   }, [audioRadius, speakerMuted]);
+
+  // Expose performance benchmark runner for browser console testing
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.runCanvasTest = async (duration = 10000) => {
+        console.log(`Starting ${duration / 1000}s Canvas FPS benchmark...`);
+        const result = await measureRenderingPerformance(duration);
+        console.table(result);
+        console.log(
+          result.averageFPS >= 55
+            ? "Canvas performance: PASS"
+            : "Canvas performance: NEEDS OPTIMIZATION"
+        );
+        return result;
+      };
+    }
+  }, []);
 
   // Update furniture/scene when layout changes
   useEffect(() => {

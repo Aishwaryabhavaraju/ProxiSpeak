@@ -79,3 +79,27 @@ test("Day 26: Movement Optimizer - Delta Time Scaling", () => {
   assert.ok(Math.abs(largeDistance - 2 * smallDistance) < 0.01);
 });
 
+test("Day 27: Canvas Rendering Performance Measurement", async () => {
+  const originalRaf = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (callback) => {
+    return setTimeout(() => callback(performance.now()), 16);
+  };
+
+  try {
+    const { measureRenderingPerformance } = await import(
+      "./renderPerformanceTest.js"
+    );
+    // Measure short 100ms test run
+    const result = await measureRenderingPerformance(100);
+
+    assert.equal(typeof result.frames, "number");
+    assert.ok(result.frames > 0);
+    assert.equal(result.targetFPS, 60);
+    assert.equal(result.targetFrameTimeMs, 16.67);
+    assert.equal(typeof result.averageFPS, "number");
+    assert.equal(typeof result.averageFrameTimeMs, "number");
+  } finally {
+    globalThis.requestAnimationFrame = originalRaf;
+  }
+});
+
