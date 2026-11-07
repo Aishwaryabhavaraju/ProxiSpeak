@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import Login from "./components/Login";
+import Dashboard from "./components/Dashboard";
 import OfficeHeader from "./components/OfficeHeader";
 import OfficeCanvas from "./components/OfficeCanvas";
 import UserList from "./components/UserList";
+import TeamChat from "./components/TeamChat";
 import AudioControls from "./components/AudioControls";
 import Toolbar from "./components/Toolbar";
+import { MessageSquare, Users } from "lucide-react";
 import { OFFICE_CONFIG } from "./utils/officeLayout";
 import {
   stepAvatarMovement,
@@ -16,43 +19,38 @@ import {
 import { useMicrophone } from "./hooks/useMicrophone";
 import { useSpatialAudio } from "./hooks/useSpatialAudio";
 import { useSocket } from "./hooks/useSocket";
+import { getStoredUser, clearAuthData } from "./services/authApi";
 import "./styles/Office.css";
 
-const INITIAL_MOCK_USERS = [
-  { id: "bot-1", username: "User A (Aarav)", x: 185, y: 145, targetX: 220, targetY: 160, color: "#0ea5e9", muted: false, isBot: true },
-  { id: "bot-2", username: "User B (Priya)", x: 245, y: 145, targetX: 280, targetY: 260, color: "#8b5cf6", muted: false, isBot: true },
-  { id: "bot-3", username: "User C (Rohan)", x: 470, y: 120, targetX: 460, targetY: 270, color: "#10b981", muted: false, isBot: true },
-  { id: "bot-4", username: "User D (Meera)", x: 140, y: 380, targetX: 290, targetY: 280, color: "#f59e0b", muted: false, isBot: true },
-  { id: "bot-5", username: "User E (Vikram)", x: 490, y: 390, targetX: 350, targetY: 140, color: "#ec4899", muted: true, isBot: true },
-];
+export default function App() {
+  // Authentication & Workspace State Machine
+  const [currentUser, setCurrentUser] = useState(() => getStoredUser());
+  const [currentRoom, setCurrentRoom] = useState(null); // { roomId, name, description }
+  const [activeSidebarTab, setActiveSidebarTab] = useState("chat"); // "chat" | "users"
+  const [chatMessages, setChatMessages] = useState([]);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
 
-function App() {
-  const [username, setUsername] = useState("");
   const [audioRadius, setAudioRadius] = useState(OFFICE_CONFIG.defaultAudioRadius);
   const [localAutoWalk, setLocalAutoWalk] = useState(false);
-  const [remoteAutoWalk, setRemoteAutoWalk] = useState(true);
-  const [roomId, setRoomId] = useState("");
-  const [roomMode, setRoomMode] = useState("");
-  const [roomCopyMessage, setRoomCopyMessage] = useState("");
 
-  // Mutable 60fps world state in ref so Canvas & Web Audio run without 60fps React rerenders
+  // Mutable 60fps world state
   const worldRef = useRef({
     localUser: {
-      id: `sim-${Math.random().toString(36).slice(2, 8)}`,
-      username: "",
-      x: 205,
-      y: 155,
-      targetX: 205,
-      targetY: 155,
+      id: `user-${Math.random().toString(36).slice(2, 8)}`,
+      username: currentUser?.username || "You",
+      x: 260,
+      y: 220,
+      targetX: 260,
+      targetY: 220,
       direction: 0,
       muted: true,
       isLocal: true,
-      color: "#0284c7",
+      color: currentUser?.avatarColor || "#818CF8",
     },
-    remoteUsers: INITIAL_MOCK_USERS,
+    remoteUsers: [],
   });
 
-  // Throttled (10 Hz) snapshot for the React sidebar UI
+  // Throttled (10 Hz) snapshot for React UI
   const [uiSnapshot, setUiSnapshot] = useState(() => ({
     localUser: worldRef.current.localUser,
     remoteUsers: worldRef.current.remoteUsers,
@@ -60,62 +58,67 @@ function App() {
 
   const keysPressedRef = useRef(new Set());
 
+  // Update worldRef localUser profile when currentUser changes
+  useEffect(() => {
+    if (currentUser) {
+      worldRef.current.localUser = {
+        ...worldRef.current.localUser,
+        username: currentUser.username,
+        color: currentUser.avatarColor || "#818CF8",
+      };
+    }
+  }, [currentUser]);
 
-const handleAssignedIdentity = useCallback((identity) => {
-  if (!identity || !identity.id) return;
+  const handleAssignedIdentity = useCallback((identity) => {
+    if (!identity || !identity.id) return;
+    const current = worldRef.current.localUser;
+    const assignedX = typeof identity.x === "number" ? identity.x : current.x;
+    const assignedY = typeof identity.y === "number" ? identity.y : current.y;
 
-  const currentUser = worldRef.current.localUser;
+    const spawn = checkCollision(assignedX, assignedY)
+      ? selectValidDestination()
+      : { x: assignedX, y: assignedY };
 
-  const assignedX =
-    typeof identity.x === "number" ? identity.x : currentUser.x;
-  const assignedY =
-    typeof identity.y === "number" ? identity.y : currentUser.y;
+    worldRef.current.localUser = {
+      ...current,
+      id: identity.id,
+      x: spawn.x,
+      y: spawn.y,
+      targetX: spawn.x,
+      targetY: spawn.y,
+    };
+  }, []);
 
-  const spawn = checkCollision(assignedX, assignedY)
-    ? selectValidDestination()
-    : { x: assignedX, y: assignedY };
-
-  worldRef.current.localUser = {
-    ...currentUser,
-    id: identity.id,
-    x: spawn.x,
-    y: spawn.y,
-    targetX: spawn.x,
-    targetY: spawn.y,
-  };
-}, []);
-
-
-  // Filter strictly by unique user ID (never by username)
   const handleRemoteUsersSync = useCallback((serverUsers, mySocketId) => {
     const localId = mySocketId || worldRef.current.localUser.id;
     const prevMap = new Map(worldRef.current.remoteUsers.map((u) => [u.id, u]));
-    const palette = ["#0ea5e9", "#8b5cf6", "#10b981", "#f59e0b", "#ec4899", "#06b6d4"];
 
     const synced = serverUsers
-      .filter((u) => u && u.id && u.id !== localId)
-      .map((u, idx) => {
-        const existing = prevMap.get(u.id);
+      .filter((u) => u && (u.id || u.userId) && (u.id !== localId && u.userId !== currentUser?.username))
+      .map((u) => {
+        const id = u.id || u.userId;
+        const existing = prevMap.get(id);
         return {
-          id: u.id,
-          username: u.username || "Colleague",
-          x: existing ? existing.x : u.x,
-          y: existing ? existing.y : u.y,
-          serverX: u.x,
-          serverY: u.y,
+          id,
+          userId: u.userId || id,
+          username: u.username || u.name || "Colleague",
+          x: existing ? existing.x : (u.x || 200),
+          y: existing ? existing.y : (u.y || 200),
+          serverX: u.x || 200,
+          serverY: u.y || 200,
           direction: u.direction || 0,
           muted: Boolean(u.muted),
-          color: existing ? existing.color : palette[idx % palette.length],
+          color: u.color || u.avatarColor || existing?.color || "#5EEAD4",
           isBot: false,
         };
       });
 
     worldRef.current.remoteUsers = synced;
-  }, []);
+  }, [currentUser]);
 
   const handleRemoteUserMoved = useCallback((movedUser) => {
     worldRef.current.remoteUsers = worldRef.current.remoteUsers.map((u) =>
-      u.id === movedUser.id
+      u.id === movedUser.id || u.userId === movedUser.userId
         ? {
             ...u,
             serverX: movedUser.x,
@@ -129,12 +132,15 @@ const handleAssignedIdentity = useCallback((identity) => {
 
   const handleUserJoined = useCallback((newUser) => {
     if (!newUser || !newUser.id || newUser.id === worldRef.current.localUser.id) return;
-    const exists = worldRef.current.remoteUsers.some((u) => u.id === newUser.id);
+    const exists = worldRef.current.remoteUsers.some(
+      (u) => u.id === newUser.id || u.userId === newUser.userId
+    );
     if (!exists) {
       worldRef.current.remoteUsers = [
         ...worldRef.current.remoteUsers,
         {
           id: newUser.id,
+          userId: newUser.userId || newUser.id,
           username: newUser.username || "Colleague",
           x: newUser.x || 200,
           y: newUser.y || 200,
@@ -142,7 +148,7 @@ const handleAssignedIdentity = useCallback((identity) => {
           serverY: newUser.y || 200,
           direction: newUser.direction || 0,
           muted: Boolean(newUser.muted),
-          color: "#0ea5e9",
+          color: newUser.color || newUser.avatarColor || "#5EEAD4",
           isBot: false,
         },
       ];
@@ -151,25 +157,40 @@ const handleAssignedIdentity = useCallback((identity) => {
 
   const handleUserLeft = useCallback((leftId) => {
     worldRef.current.remoteUsers = worldRef.current.remoteUsers.filter(
-      (u) => u.id !== leftId
+      (u) => u.id !== leftId && u.userId !== leftId
     );
+  }, []);
+
+  const handleChatMessage = useCallback((msg) => {
+    setChatMessages((prev) => [...prev, msg]);
+    // Increment unread badge if currently viewing users tab
+    setActiveSidebarTab((currentTab) => {
+      if (currentTab !== "chat") {
+        setUnreadChatCount((count) => count + 1);
+      }
+      return currentTab;
+    });
   }, []);
 
   const {
     connectionState,
-    serverUrl,
     connectToBackend,
-    switchToSimulation,
+    leaveOffice,
     emitPositionUpdate,
     emitMuteStatus,
+    sendChatMessage,
   } = useSocket({
-    username,
+    username: currentUser?.username,
+    userId: currentUser?.username,
+    roomId: currentRoom?.roomId,
+    color: currentUser?.avatarColor,
     localMuted: worldRef.current.localUser.muted,
     onAssignedIdentity: handleAssignedIdentity,
     onRemoteUsersSync: handleRemoteUsersSync,
     onRemoteUserMoved: handleRemoteUserMoved,
     onUserJoined: handleUserJoined,
     onUserLeft: handleUserLeft,
+    onChatMessage: handleChatMessage,
   });
 
   const handleMuteChanged = useCallback(
@@ -194,19 +215,12 @@ const handleAssignedIdentity = useCallback((identity) => {
     stopMicrophone,
   } = useMicrophone({ onMuteChanged: handleMuteChanged });
 
-  // Attempt backend connection automatically on login; falls back to simulation if server is offline
+  // Connect socket whenever currentRoom is active
   useEffect(() => {
-    if (username) {
+    if (currentUser && currentRoom) {
       connectToBackend();
     }
-  }, [username, connectToBackend]);
-
-  // Restore simulation bots when switching back to simulation mode
-  useEffect(() => {
-    if (connectionState === "simulation" && worldRef.current.remoteUsers.every((u) => !u.isBot)) {
-      worldRef.current.remoteUsers = INITIAL_MOCK_USERS;
-    }
-  }, [connectionState]);
+  }, [currentUser, currentRoom, connectToBackend]);
 
   const { spatialMetrics } = useSpatialAudio(
     worldRef,
@@ -216,24 +230,17 @@ const handleAssignedIdentity = useCallback((identity) => {
     micEnabled
   );
 
-  // Sync username & mute flag into worldRef
+  // Sync mute flag to local avatar in worldRef
   useEffect(() => {
     worldRef.current.localUser = {
       ...worldRef.current.localUser,
-      username,
       muted: micMuted || !micEnabled,
     };
-  }, [username, micMuted, micEnabled]);
+  }, [micMuted, micEnabled]);
 
-  const handleJoinRoom = (displayName, selectedRoomId, mode) => {
-  setUsername(displayName);
-  setRoomId(selectedRoomId);
-  setRoomMode(mode);
-};
-
-  // 60 FPS Physics & Movement Loop (StrictMode-safe: zero side effects inside React state updaters)
+  // 60 FPS Physics & Movement Loop
   useEffect(() => {
-    if (!username) return undefined;
+    if (!currentRoom) return undefined;
     let lastTime = performance.now();
     let frameId;
 
@@ -301,29 +308,21 @@ const handleAssignedIdentity = useCallback((identity) => {
       }
       worldRef.current.localUser = me;
 
-      // Update remote avatars: autonomous movement in simulation, smooth lerp in live connected mode
-      if (connectionState === "simulation") {
-        if (remoteAutoWalk) {
-          worldRef.current.remoteUsers = worldRef.current.remoteUsers.map((peer) =>
-            stepAvatarMovement(peer, dt, 58, OFFICE_CONFIG)
-          );
-        }
-      } else {
-        worldRef.current.remoteUsers = worldRef.current.remoteUsers.map((peer) =>
-          interpolateRemoteAvatar(peer, dt, 10)
-        );
-      }
+      // Smooth interpolation for remote avatars
+      worldRef.current.remoteUsers = worldRef.current.remoteUsers.map((peer) =>
+        interpolateRemoteAvatar(peer, dt, 10)
+      );
 
       frameId = requestAnimationFrame(tick);
     }
 
     frameId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frameId);
-  }, [username, localAutoWalk, remoteAutoWalk, connectionState, emitPositionUpdate]);
+  }, [currentRoom, localAutoWalk, emitPositionUpdate]);
 
   // Throttled 10 Hz UI snapshot sync for sidebar
   useEffect(() => {
-    if (!username) return undefined;
+    if (!currentRoom) return undefined;
     const timer = setInterval(() => {
       setUiSnapshot({
         localUser: { ...worldRef.current.localUser },
@@ -331,11 +330,11 @@ const handleAssignedIdentity = useCallback((identity) => {
       });
     }, 100);
     return () => clearInterval(timer);
-  }, [username]);
+  }, [currentRoom]);
 
-  // Held-key listener with preventDefault for Arrow keys
+  // Held-key listener for WASD and Arrows
   useEffect(() => {
-    if (!username) return undefined;
+    if (!currentRoom) return undefined;
     const navCodes = new Set([
       "ArrowUp",
       "ArrowDown",
@@ -372,7 +371,7 @@ const handleAssignedIdentity = useCallback((identity) => {
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", handleBlur);
     };
-  }, [username]);
+  }, [currentRoom]);
 
   function handleSelectLocalTarget({ x, y }) {
     if (!checkCollision(x, y, OFFICE_CONFIG.avatarRadius, OFFICE_CONFIG)) {
@@ -385,77 +384,61 @@ const handleAssignedIdentity = useCallback((identity) => {
     }
   }
 
-  function handleAddMockUser() {
-    const dest = selectValidDestination(OFFICE_CONFIG);
-    const start = selectValidDestination(OFFICE_CONFIG);
-    const idx = worldRef.current.remoteUsers.length + 1;
-    worldRef.current.remoteUsers = [
-      ...worldRef.current.remoteUsers,
-      {
-        id: `bot-${Date.now()}`,
-        username: `User ${String.fromCharCode(64 + idx)}`,
-        x: start.x,
-        y: start.y,
-        targetX: dest.x,
-        targetY: dest.y,
-        color: "#06b6d4",
-        muted: false,
-        isBot: true,
-      },
-    ];
+  function handleExitOffice() {
+    stopMicrophone();
+    leaveOffice();
+    setCurrentRoom(null);
+    setChatMessages([]);
+    worldRef.current.remoteUsers = [];
   }
 
-  function handleLeaveOffice() {
-  stopMicrophone();
-  setUsername("");
-  setRoomId("");
-  setRoomMode("");
-  setRoomCopyMessage("");
-}
+  function handleLogout() {
+    handleExitOffice();
+    clearAuthData();
+    setCurrentUser(null);
+  }
 
-  if (!username) {
-  return <Login onJoin={handleJoinRoom} />;
-}
-  
+  // Calculate nearby users within audioRadius (< 100px)
+  const nearbyUsersCount = uiSnapshot.remoteUsers.filter((u) => {
+    const dist = Math.hypot(
+      (u.x || 0) - (uiSnapshot.localUser?.x || 0),
+      (u.y || 0) - (uiSnapshot.localUser?.y || 0)
+    );
+    return dist <= audioRadius;
+  }).length;
+
+  // View 1: Not Authenticated -> Login / Register Screen
+  if (!currentUser) {
+    return <Login onAuthenticated={(user) => setCurrentUser(user)} />;
+  }
+
+  // View 2: Authenticated but Not in a Room -> Dashboard
+  if (!currentRoom) {
+    return (
+      <Dashboard
+        user={currentUser}
+        onEnterRoom={(room) => setCurrentRoom(room)}
+        onLogout={handleLogout}
+      />
+    );
+  }
+
+  // View 3: In Virtual Office
   return (
     <div className="office-shell">
-      {roomId && (
-        <div className="active-room-banner">
-          <div className="active-room-details">
-            <span className="active-room-label">
-              {roomMode === "create" ? "YOUR ROOM" : "JOINED ROOM"}
-            </span>
-            <code>{roomId}</code>
-          </div>
-
-          <button
-            type="button"
-            className="active-room-copy"
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(roomId);
-                setRoomCopyMessage("Copied!");
-              } catch {
-                setRoomCopyMessage("Copy unavailable");
-              }
-            }}
-          >
-            {roomCopyMessage || "Copy room ID"}
-          </button>
-        </div>
-      )}
-
       <OfficeHeader
-        username={username}
-        localId={uiSnapshot.localUser.id}
+        username={currentUser.username}
+        roomName={currentRoom.name}
+        roomId={currentRoom.roomId}
         connectionState={connectionState}
-        serverUrl={serverUrl}
-        onConnectLive={connectToBackend}
-        onUseSimulation={switchToSimulation}
-        onLeaveOffice={handleLeaveOffice}
+        memberCount={1 + uiSnapshot.remoteUsers.length}
+        nearbyCount={nearbyUsersCount}
+        onExitOffice={handleExitOffice}
+        onLogout={handleLogout}
       />
 
       <main className="office-main-grid">
+        {/* Left: Interactive Virtual Office Canvas */}
         <div className="canvas-stage-card">
           <OfficeCanvas
             worldRef={worldRef}
@@ -465,20 +448,59 @@ const handleAssignedIdentity = useCallback((identity) => {
           />
           <Toolbar
             localAutoWalk={localAutoWalk}
-            remoteAutoWalk={remoteAutoWalk}
-            connectionState={connectionState}
             onToggleLocalAutoWalk={() => setLocalAutoWalk((v) => !v)}
-            onToggleRemoteAutoWalk={() => setRemoteAutoWalk((v) => !v)}
-            onAddMockUser={handleAddMockUser}
           />
         </div>
 
+        {/* Right: Multi-tab Side Panel (Team Chat & Colleagues) + Audio Controls */}
         <aside className="office-sidebar">
-          <UserList
-            localUser={uiSnapshot.localUser}
-            remoteUsers={uiSnapshot.remoteUsers}
-            spatialMetrics={spatialMetrics}
-          />
+          <div className="sidebar-tab-switcher">
+            <button
+              type="button"
+              className={`sidebar-tab-btn ${activeSidebarTab === "chat" ? "active" : ""}`}
+              onClick={() => {
+                setActiveSidebarTab("chat");
+                setUnreadChatCount(0);
+              }}
+            >
+              <MessageSquare size={16} />
+              <span>Team Chat</span>
+              {unreadChatCount > 0 && (
+                <span className="sidebar-tab-badge">{unreadChatCount}</span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              className={`sidebar-tab-btn ${activeSidebarTab === "users" ? "active" : ""}`}
+              onClick={() => setActiveSidebarTab("users")}
+            >
+              <Users size={16} />
+              <span>Colleagues</span>
+              <span className="sidebar-tab-counter">
+                {1 + uiSnapshot.remoteUsers.length}
+              </span>
+            </button>
+          </div>
+
+          <div className="sidebar-tab-content">
+            {activeSidebarTab === "chat" ? (
+              <TeamChat
+                roomId={currentRoom.roomId}
+                roomName={currentRoom.name}
+                messages={chatMessages}
+                onSendMessage={sendChatMessage}
+                currentUsername={currentUser.username}
+              />
+            ) : (
+              <UserList
+                localUser={uiSnapshot.localUser}
+                remoteUsers={uiSnapshot.remoteUsers}
+                spatialMetrics={spatialMetrics}
+              />
+            )}
+          </div>
+
           <AudioControls
             micEnabled={micEnabled}
             micMuted={micMuted}
@@ -495,5 +517,3 @@ const handleAssignedIdentity = useCallback((identity) => {
     </div>
   );
 }
-
-export default App;

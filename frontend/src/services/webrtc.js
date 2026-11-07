@@ -1,13 +1,25 @@
 import { audioEngine } from "./audioEngine";
 
-const DEFAULT_ICE_SERVERS = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun1.l.google.com:19302" },
-];
+function getIceServers() {
+  if (
+    typeof import.meta !== "undefined" &&
+    import.meta.env &&
+    import.meta.env.VITE_ICE_SERVERS
+  ) {
+    try {
+      return JSON.parse(import.meta.env.VITE_ICE_SERVERS);
+    } catch (_) {}
+  }
+  return [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+  ];
+}
 
 /**
  * Manages RTCPeerConnection lifecycle, deterministic offer initiation,
- * mid-session track renegotiation (`onnegotiationneeded`), and ICE candidate queuing.
+ * mid-session track renegotiation (`onnegotiationneeded`), perfect negotiation rollback,
+ * and ICE candidate queuing.
  */
 class WebRTCManager {
   constructor() {
@@ -27,6 +39,7 @@ class WebRTCManager {
   setLocalStream(stream) {
     this.localStream = stream;
     for (const [peerId, pc] of this.peers.entries()) {
+      if (!pc || pc.connectionState === "closed") continue;
       const senders = pc.getSenders();
       if (stream) {
         for (const track of stream.getAudioTracks()) {
@@ -35,12 +48,24 @@ class WebRTCManager {
             existing.replaceTrack(track);
           } else {
             pc.addTrack(track, stream);
-            // Adding a track triggers pc.onnegotiationneeded automatically,
-            // or we explicitly renegotiate if already stable.
             if (pc.signalingState === "stable") {
               this.initiateOffer(peerId, pc);
             }
           }
+        }
+      } else {
+        for (const sender of senders) {
+          if (sender.track && sender.track.kind === "audio") {
+            try {
+              sender.track.stop();
+            } catch (_) {}
+            try {
+              pc.removeTrack(sender);
+            } catch (_) {}
+          }
+        }
+        if (pc.signalingState === "stable") {
+          this.initiateOffer(peerId, pc);
         }
       }
     }
@@ -49,13 +74,17 @@ class WebRTCManager {
   createPeerConnection(peerId, isInitiator = false) {
     if (!peerId) return null;
     if (this.peers.has(peerId)) {
-      return this.peers.get(peerId);
+      const existing = this.peers.get(peerId);
+      if (existing.connectionState !== "closed" && existing.connectionState !== "failed") {
+        return existing;
+      }
+      this.closePeer(peerId);
     }
     if (typeof window === "undefined" || !window.RTCPeerConnection) {
       return null;
     }
 
-    const pc = new window.RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
+    const pc = new window.RTCPeerConnection({ iceServers: getIceServers() });
     this.peers.set(peerId, pc);
 
     if (this.localStream) {
@@ -75,7 +104,7 @@ class WebRTCManager {
         this.socket.emit("webrtc-ice-candidate", {
           targetId: peerId,
           fromId: this.socket.id,
-          candidate: event.candidate,
+          candidate: event.candidate.toJSON ? event.candidate.toJSON() : event.candidate,
         });
       }
     };
@@ -84,14 +113,25 @@ class WebRTCManager {
       const remoteStream =
         (event.streams && event.streams[0]) || new MediaStream([event.track]);
       audioEngine.attachRemoteStream(peerId, remoteStream);
+      if (event.track) {
+        event.track.onunmute = () => {
+          audioEngine.attachRemoteStream(peerId, remoteStream);
+        };
+      }
     };
 
     pc.onconnectionstatechange = () => {
       if (this.onPeerStateChange) {
         this.onPeerStateChange(peerId, pc.connectionState);
       }
-      if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
+      if (["failed", "closed"].includes(pc.connectionState)) {
         audioEngine.removePeer(peerId);
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === "failed") {
+        pc.restartIce?.();
       }
     };
 
@@ -132,10 +172,17 @@ class WebRTCManager {
       const offerCollision =
         this.makingOffer.get(fromId) || pc.signalingState !== "stable";
       const polite = String(this.socket?.id || "") > String(fromId);
-      if (offerCollision && !polite) {
-        return;
+      if (offerCollision) {
+        if (!polite) {
+          return;
+        }
+        await Promise.all([
+          pc.setLocalDescription({ type: "rollback" }),
+          pc.setRemoteDescription(new window.RTCSessionDescription(sdp)),
+        ]);
+      } else {
+        await pc.setRemoteDescription(new window.RTCSessionDescription(sdp));
       }
-      await pc.setRemoteDescription(new window.RTCSessionDescription(sdp));
       await this.flushPendingCandidates(fromId, pc);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -155,6 +202,9 @@ class WebRTCManager {
     const pc = this.peers.get(fromId);
     if (!pc || !sdp) return;
     try {
+      if (pc.signalingState !== "have-local-offer") {
+        return;
+      }
       await pc.setRemoteDescription(new window.RTCSessionDescription(sdp));
       await this.flushPendingCandidates(fromId, pc);
     } catch (err) {
@@ -174,7 +224,7 @@ class WebRTCManager {
     try {
       await pc.addIceCandidate(new window.RTCIceCandidate(candidate));
     } catch (err) {
-      console.error("Error adding ICE candidate:", err);
+      // Ignore duplicate or discarded candidate errors
     }
   }
 
@@ -191,6 +241,11 @@ class WebRTCManager {
   closePeer(peerId) {
     const pc = this.peers.get(peerId);
     if (pc) {
+      pc.onicecandidate = null;
+      pc.ontrack = null;
+      pc.onnegotiationneeded = null;
+      pc.onconnectionstatechange = null;
+      pc.oniceconnectionstatechange = null;
       try {
         pc.close();
       } catch (_) {}
@@ -199,6 +254,9 @@ class WebRTCManager {
     this.makingOffer.delete(peerId);
     this.pendingCandidates.delete(peerId);
     audioEngine.removePeer(peerId);
+    if (this.onPeerStateChange) {
+      this.onPeerStateChange(peerId, "closed");
+    }
   }
 
   closeAll() {

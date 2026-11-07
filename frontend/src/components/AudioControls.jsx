@@ -1,70 +1,92 @@
 import React from "react";
+import { Mic, MicOff, Volume2, VolumeX, Sliders, Radio } from "lucide-react";
+import "../styles/AudioControls.css";
 
-function AudioControls({
+export default function AudioControls({
   micEnabled,
   micMuted,
   speakerMuted,
   micError,
-  audioRadius,
+  audioRadius = 100,
   onEnableMic,
   onToggleMicMute,
   onToggleSpeakerMute,
   onChangeRadius,
 }) {
   return (
-    <section className="sidebar-panel" aria-label="Audio Controls">
-      <h3>Audio & Spatial Controls</h3>
-      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+    <section className="audio-panel" aria-label="Audio Controls">
+      <div className="audio-panel-header">
+        <div className="audio-panel-title-wrap">
+          <Radio size={16} className="audio-panel-icon" />
+          <h3 className="audio-panel-title">Audio & Spatial</h3>
+        </div>
+        <span className="audio-status-tag">WebRTC Audio</span>
+      </div>
+
+      <div className="audio-panel-body">
+        {/* Mic Control Button */}
         {!micEnabled ? (
-          <button type="button" className="toolbar-btn active" onClick={onEnableMic}>
-            Enable Microphone (WebRTC)
+          <button
+            type="button"
+            className="audio-btn audio-btn-enable"
+            onClick={onEnableMic}
+          >
+            <Mic size={16} />
+            <span>Enable Microphone</span>
           </button>
         ) : (
           <button
             type="button"
-            className={`toolbar-btn ${micMuted ? "danger" : "active"}`}
+            className={`audio-btn ${micMuted ? "audio-btn-muted" : "audio-btn-active"}`}
             onClick={onToggleMicMute}
           >
-            {micMuted ? "Unmute Microphone" : "Mute Microphone"}
+            {micMuted ? <MicOff size={16} /> : <Mic size={16} />}
+            <span>{micMuted ? "Unmute Microphone" : "Mute Microphone"}</span>
           </button>
         )}
 
+        {/* Speaker Output Control Button */}
         <button
           type="button"
-          className={`toolbar-btn ${speakerMuted ? "danger" : ""}`}
+          className={`audio-btn ${speakerMuted ? "audio-btn-deafened" : "audio-btn-speaker"}`}
           onClick={onToggleSpeakerMute}
         >
-          {speakerMuted ? "Speaker Output: Muted" : "Speaker Output: On"}
+          {speakerMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+          <span>{speakerMuted ? "Deafened (Audio Muted)" : "Output: Active"}</span>
         </button>
 
-        <div style={{ marginTop: "6px" }}>
-          <label
-            htmlFor="audio-radius-slider"
-            style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "#cbd5e1", marginBottom: "4px" }}
-          >
-            <span>Proximity Radius</span>
-            <strong>{audioRadius} px</strong>
-          </label>
+        {/* Spatial Radius Slider */}
+        <div className="audio-slider-wrap">
+          <div className="audio-slider-labels">
+            <span className="audio-slider-title">
+              <Sliders size={13} />
+              <span>Earshot Radius</span>
+            </span>
+            <span className="audio-radius-badge">{audioRadius} px</span>
+          </div>
           <input
             id="audio-radius-slider"
             type="range"
             min={60}
-            max={220}
+            max={200}
             step={10}
             value={audioRadius}
             onChange={(e) => onChangeRadius(Number(e.target.value))}
-            style={{ width: "100%" }}
+            className="audio-range-input"
           />
+          <div className="audio-slider-sub">
+            <span>Conversational: 100px</span>
+            <span>Max: 200px</span>
+          </div>
         </div>
 
+        {/* Error notification if microphone access blocked */}
         {micError && (
-          <div style={{ fontSize: "12px", color: "#fca5a5", marginTop: "4px" }}>
-            {micError}
+          <div className="audio-error-banner" role="alert">
+            <span>{micError}</span>
           </div>
         )}
       </div>
     </section>
   );
 }
-
-export default AudioControls;
