@@ -14,6 +14,12 @@ export function useSocket({
   onUserJoined,
   onUserLeft,
   onChatMessage,
+  onChatReaction,
+  onDirectMessage,
+  onHandRaise,
+  onAvatarReaction,
+  onMediaState,
+  onSpatialAudioUpdate,
 }) {
   const [connectionState, setConnectionState] = useState("disconnected");
   const [serverError, setServerError] = useState("");
@@ -107,6 +113,71 @@ export function useSocket({
     [roomId, username]
   );
 
+  const sendChatReaction = useCallback(
+    ({ messageId, emoji }) => {
+      if (socket.connected && messageId && emoji) {
+        socket.emit("chat:reaction", {
+          messageId,
+          roomId: roomId || "MAIN-OFFICE",
+          emoji,
+          username,
+        });
+      }
+    },
+    [roomId, username]
+  );
+
+  const sendDirectMessage = useCallback(
+    ({ recipientId, recipientUsername, text }) => {
+      if (socket.connected && recipientId && text && text.trim()) {
+        socket.emit("chat:direct-message", {
+          recipientId,
+          recipientUsername,
+          text: text.trim(),
+          senderUsername: username,
+          senderColor: color || "#818CF8",
+        });
+      }
+    },
+    [username, color]
+  );
+
+  const emitHandRaise = useCallback(
+    (raised) => {
+      if (socket.connected) {
+        socket.emit("user:hand-raise", {
+          roomId: roomId || "MAIN-OFFICE",
+          raised: Boolean(raised),
+        });
+      }
+    },
+    [roomId]
+  );
+
+  const emitAvatarReaction = useCallback(
+    (emoji) => {
+      if (socket.connected && emoji) {
+        socket.emit("avatar:reaction", {
+          roomId: roomId || "MAIN-OFFICE",
+          emoji,
+        });
+      }
+    },
+    [roomId]
+  );
+
+  const emitMediaState = useCallback(
+    (mediaState) => {
+      if (socket.connected && mediaState) {
+        socket.emit("webrtc:media-state", {
+          roomId: roomId || "MAIN-OFFICE",
+          ...mediaState,
+        });
+      }
+    },
+    [roomId]
+  );
+
   useEffect(() => {
     if (!username) return undefined;
 
@@ -176,6 +247,42 @@ export function useSocket({
       }
     }
 
+    function handleChatReaction(data) {
+      if (data && onChatReaction) {
+        onChatReaction(data);
+      }
+    }
+
+    function handleDirectMessage(msg) {
+      if (msg && onDirectMessage) {
+        onDirectMessage(msg);
+      }
+    }
+
+    function handleHandRaise(data) {
+      if (data && onHandRaise) {
+        onHandRaise(data);
+      }
+    }
+
+    function handleAvatarReaction(data) {
+      if (data && onAvatarReaction) {
+        onAvatarReaction(data);
+      }
+    }
+
+    function handleMediaState(data) {
+      if (data && onMediaState) {
+        onMediaState(data);
+      }
+    }
+
+    function handleSpatialUpdate(data) {
+      if (data && onSpatialAudioUpdate) {
+        onSpatialAudioUpdate(data);
+      }
+    }
+
     socket.on("connect", handleConnect);
     socket.on("session-confirmed", handleSessionConfirmed);
     socket.on("connect_error", handleConnectError);
@@ -185,6 +292,12 @@ export function useSocket({
     socket.on("user-joined", handleUserJoined);
     socket.on("user-left", handleUserLeft);
     socket.on("chat:message", handleChatMessage);
+    socket.on("chat:reaction", handleChatReaction);
+    socket.on("chat:direct-message", handleDirectMessage);
+    socket.on("user:hand-raise", handleHandRaise);
+    socket.on("avatar:reaction", handleAvatarReaction);
+    socket.on("webrtc:media-state", handleMediaState);
+    socket.on("spatial:audio:update", handleSpatialUpdate);
     socket.on("webrtc-offer", (data) => webrtcManager.handleIncomingOffer(data));
     socket.on("webrtc-answer", (data) => webrtcManager.handleIncomingAnswer(data));
     socket.on("webrtc-ice-candidate", (data) => webrtcManager.handleIncomingIceCandidate(data));
@@ -203,6 +316,12 @@ export function useSocket({
       socket.off("user-joined", handleUserJoined);
       socket.off("user-left", handleUserLeft);
       socket.off("chat:message", handleChatMessage);
+      socket.off("chat:reaction", handleChatReaction);
+      socket.off("chat:direct-message", handleDirectMessage);
+      socket.off("user:hand-raise", handleHandRaise);
+      socket.off("avatar:reaction", handleAvatarReaction);
+      socket.off("webrtc:media-state", handleMediaState);
+      socket.off("spatial:audio:update", handleSpatialUpdate);
       socket.off("webrtc-offer");
       socket.off("webrtc-answer");
       socket.off("webrtc-ice-candidate");
@@ -221,5 +340,10 @@ export function useSocket({
     emitPositionUpdate,
     emitMuteStatus,
     sendChatMessage,
+    sendChatReaction,
+    sendDirectMessage,
+    emitHandRaise,
+    emitAvatarReaction,
+    emitMediaState,
   };
 }

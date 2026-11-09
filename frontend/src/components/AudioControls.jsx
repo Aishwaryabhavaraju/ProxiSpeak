@@ -1,5 +1,5 @@
 import React from "react";
-import { Mic, MicOff, Volume2, VolumeX, Sliders, Radio } from "lucide-react";
+import { Mic, MicOff, Volume2, VolumeX, Sliders, Radio, KeyRound } from "lucide-react";
 import "../styles/AudioControls.css";
 
 export default function AudioControls({
@@ -8,10 +8,16 @@ export default function AudioControls({
   speakerMuted,
   micError,
   audioRadius = 100,
+  masterVolume = 100,
+  isPushToTalk = false,
   onEnableMic,
   onToggleMicMute,
   onToggleSpeakerMute,
   onChangeRadius,
+  onChangeMasterVolume,
+  onTogglePushToTalk,
+  onPttMouseDown,
+  onPttMouseUp,
 }) {
   return (
     <section className="audio-panel" aria-label="Audio Controls">
@@ -20,7 +26,7 @@ export default function AudioControls({
           <Radio size={16} className="audio-panel-icon" />
           <h3 className="audio-panel-title">Audio & Spatial</h3>
         </div>
-        <span className="audio-status-tag">WebRTC Audio</span>
+        <span className="audio-status-tag">Web Audio API</span>
       </div>
 
       <div className="audio-panel-body">
@@ -33,6 +39,19 @@ export default function AudioControls({
           >
             <Mic size={16} />
             <span>Enable Microphone</span>
+          </button>
+        ) : isPushToTalk ? (
+          /* Push-to-Talk Hold-to-Speak button */
+          <button
+            type="button"
+            className={`audio-btn ${micMuted ? "audio-btn-ptt-idle" : "audio-btn-ptt-active"}`}
+            onMouseDown={onPttMouseDown}
+            onMouseUp={onPttMouseUp}
+            onTouchStart={onPttMouseDown}
+            onTouchEnd={onPttMouseUp}
+          >
+            {micMuted ? <MicOff size={16} /> : <Mic size={16} />}
+            <span>{micMuted ? "Hold Space / Click to Talk" : "Transmitting Audio..."}</span>
           </button>
         ) : (
           <button
@@ -52,8 +71,41 @@ export default function AudioControls({
           onClick={onToggleSpeakerMute}
         >
           {speakerMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-          <span>{speakerMuted ? "Deafened (Audio Muted)" : "Output: Active"}</span>
+          <span>{speakerMuted ? "Deafened (Muted Output)" : "Output: Active"}</span>
         </button>
+
+        {/* Push to talk mode toggle */}
+        <div className="audio-ptt-row">
+          <button
+            type="button"
+            className={`audio-ptt-toggle-btn ${isPushToTalk ? "active" : ""}`}
+            onClick={onTogglePushToTalk}
+          >
+            <KeyRound size={13} />
+            <span>Push-to-Talk: {isPushToTalk ? "ON (Spacebar)" : "OFF"}</span>
+          </button>
+        </div>
+
+        {/* Master Output Volume Slider */}
+        <div className="audio-slider-wrap">
+          <div className="audio-slider-labels">
+            <span className="audio-slider-title">
+              <Volume2 size={13} />
+              <span>Master Output Volume</span>
+            </span>
+            <span className="audio-radius-badge">{masterVolume}%</span>
+          </div>
+          <input
+            id="master-volume-slider"
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={masterVolume}
+            onChange={(e) => onChangeMasterVolume?.(Number(e.target.value))}
+            className="audio-range-input"
+          />
+        </div>
 
         {/* Spatial Radius Slider */}
         <div className="audio-slider-wrap">

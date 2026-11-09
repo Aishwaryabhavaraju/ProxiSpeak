@@ -27,13 +27,19 @@ class WebRTCManager {
     this.makingOffer = new Map();
     this.pendingCandidates = new Map();
     this.localStream = null;
+    this.localVideoTrack = null;
+    this.screenShareTrack = null;
     this.socket = null;
     this.onPeerStateChange = null;
+    this.onRemoteVideoTrack = null;
+    this.onRemoteVideoTrackEnded = null;
   }
 
-  initialize(socketInstance, onPeerStateChange) {
+  initialize(socketInstance, onPeerStateChange, onRemoteVideoTrack = null, onRemoteVideoTrackEnded = null) {
     this.socket = socketInstance;
     this.onPeerStateChange = onPeerStateChange;
+    this.onRemoteVideoTrack = onRemoteVideoTrack;
+    this.onRemoteVideoTrackEnded = onRemoteVideoTrackEnded;
   }
 
   setLocalStream(stream) {
@@ -71,6 +77,62 @@ class WebRTCManager {
     }
   }
 
+  setLocalVideoTrack(track) {
+    this.localVideoTrack = track;
+    for (const [peerId, pc] of this.peers.entries()) {
+      if (!pc || pc.connectionState === "closed") continue;
+      const senders = pc.getSenders();
+      const existing = senders.find((s) => s.track && s.track.kind === "video" && s._type !== "screen");
+
+      if (track) {
+        if (existing) {
+          existing.replaceTrack(track);
+        } else {
+          const sender = pc.addTrack(track, new MediaStream([track]));
+          sender._type = "camera";
+          if (pc.signalingState === "stable") {
+            this.initiateOffer(peerId, pc);
+          }
+        }
+      } else if (existing) {
+        try {
+          pc.removeTrack(existing);
+        } catch (_) {}
+        if (pc.signalingState === "stable") {
+          this.initiateOffer(peerId, pc);
+        }
+      }
+    }
+  }
+
+  setScreenShareTrack(track) {
+    this.screenShareTrack = track;
+    for (const [peerId, pc] of this.peers.entries()) {
+      if (!pc || pc.connectionState === "closed") continue;
+      const senders = pc.getSenders();
+      const existing = senders.find((s) => s._type === "screen");
+
+      if (track) {
+        if (existing) {
+          existing.replaceTrack(track);
+        } else {
+          const sender = pc.addTrack(track, new MediaStream([track]));
+          sender._type = "screen";
+          if (pc.signalingState === "stable") {
+            this.initiateOffer(peerId, pc);
+          }
+        }
+      } else if (existing) {
+        try {
+          pc.removeTrack(existing);
+        } catch (_) {}
+        if (pc.signalingState === "stable") {
+          this.initiateOffer(peerId, pc);
+        }
+      }
+    }
+  }
+
   createPeerConnection(peerId, isInitiator = false) {
     if (!peerId) return null;
     if (this.peers.has(peerId)) {
@@ -93,6 +155,16 @@ class WebRTCManager {
       }
     }
 
+    if (this.localVideoTrack) {
+      const sender = pc.addTrack(this.localVideoTrack, new MediaStream([this.localVideoTrack]));
+      sender._type = "camera";
+    }
+
+    if (this.screenShareTrack) {
+      const sender = pc.addTrack(this.screenShareTrack, new MediaStream([this.screenShareTrack]));
+      sender._type = "screen";
+    }
+
     // Renegotiation handler when tracks are added after connection is open
     pc.onnegotiationneeded = async () => {
       if (!isInitiator && pc.remoteDescription === null) return;
@@ -110,12 +182,23 @@ class WebRTCManager {
     };
 
     pc.ontrack = (event) => {
+      const track = event.track;
       const remoteStream =
-        (event.streams && event.streams[0]) || new MediaStream([event.track]);
-      audioEngine.attachRemoteStream(peerId, remoteStream);
-      if (event.track) {
-        event.track.onunmute = () => {
+        (event.streams && event.streams[0]) || new MediaStream([track]);
+
+      if (track.kind === "audio") {
+        audioEngine.attachRemoteStream(peerId, remoteStream);
+        track.onunmute = () => {
           audioEngine.attachRemoteStream(peerId, remoteStream);
+        };
+      } else if (track.kind === "video") {
+        if (this.onRemoteVideoTrack) {
+          this.onRemoteVideoTrack(peerId, track, remoteStream);
+        }
+        track.onended = () => {
+          if (this.onRemoteVideoTrackEnded) {
+            this.onRemoteVideoTrackEnded(peerId, track);
+          }
         };
       }
     };
@@ -126,6 +209,9 @@ class WebRTCManager {
       }
       if (["failed", "closed"].includes(pc.connectionState)) {
         audioEngine.removePeer(peerId);
+        if (this.onRemoteVideoTrackEnded) {
+          this.onRemoteVideoTrackEnded(peerId);
+        }
       }
     };
 
@@ -147,7 +233,10 @@ class WebRTCManager {
     if (pc.signalingState !== "stable") return;
     try {
       this.makingOffer.set(peerId, true);
-      const offer = await pc.createOffer({ offerToReceiveAudio: true });
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true,
+      });
       if (pc.signalingState !== "stable") return;
       await pc.setLocalDescription(offer);
       if (this.socket && this.socket.connected) {
@@ -254,6 +343,9 @@ class WebRTCManager {
     this.makingOffer.delete(peerId);
     this.pendingCandidates.delete(peerId);
     audioEngine.removePeer(peerId);
+    if (this.onRemoteVideoTrackEnded) {
+      this.onRemoteVideoTrackEnded(peerId);
+    }
     if (this.onPeerStateChange) {
       this.onPeerStateChange(peerId, "closed");
     }

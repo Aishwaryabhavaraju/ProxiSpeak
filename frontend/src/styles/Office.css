@@ -67,28 +67,30 @@
 /* Sidebar Tab Switcher */
 .sidebar-tab-switcher {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   background: #1F2937;
   border: 1px solid #374151;
   border-radius: 8px;
   padding: 4px;
+  gap: 4px;
 }
 
 .sidebar-tab-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 4px;
   background: transparent;
   border: none;
-  padding: 8px 12px;
-  font-size: 13px;
+  padding: 8px 6px;
+  font-size: 12px;
   font-weight: 600;
   color: #9CA3AF;
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s ease;
   position: relative;
+  white-space: nowrap;
 }
 
 .sidebar-tab-btn:hover {
@@ -105,9 +107,13 @@
   color: #FFFFFF;
   font-size: 10px;
   font-weight: 700;
-  padding: 1px 6px;
+  padding: 1px 5px;
   border-radius: 10px;
   margin-left: 2px;
+}
+
+.sidebar-tab-badge.dm-badge {
+  background: #3B82F6;
 }
 
 .sidebar-tab-counter {

@@ -2,31 +2,35 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { OFFICE_CONFIG } from "../utils/officeLayout";
 import { calculateDistance } from "../utils/distance";
 import { calculateVolume } from "../utils/audioCalculations";
+import { createPerformanceMonitor } from "../utils/performanceMonitor";
 
 /**
  * 60 FPS Canvas rendering the dark-theme Virtual Office, cursor-following movement,
- * 100px earshot boundary, 200px approaching boundary, and dynamic spatial audio links.
+ * 100px earshot boundary, dynamic spatial audio links, hand-raising, floating reactions,
+ * and real-time performance monitoring.
  */
 function OfficeCanvas({
   worldRef,
   audioRadius = 100,
   speakerMuted = false,
   onSelectLocalTarget,
+  avatarReactions = [],
 }) {
   const canvasRef = useRef(null);
-  const propsRef = useRef({ audioRadius, speakerMuted });
+  const propsRef = useRef({ audioRadius, speakerMuted, avatarReactions });
   const [isMouseDown, setIsMouseDown] = useState(false);
   const mousePosRef = useRef(null);
 
   useEffect(() => {
-    propsRef.current = { audioRadius, speakerMuted };
-  }, [audioRadius, speakerMuted]);
+    propsRef.current = { audioRadius, speakerMuted, avatarReactions };
+  }, [audioRadius, speakerMuted, avatarReactions]);
 
   // Main 60 FPS Canvas Drawing Loop
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return undefined;
     const ctx = canvas.getContext("2d");
+    const perfMonitor = createPerformanceMonitor();
     let animationId;
     let pulseAngle = 0;
 
@@ -38,7 +42,7 @@ function OfficeCanvas({
     function drawScene() {
       pulseAngle = (pulseAngle + 0.05) % (Math.PI * 2);
       const { localUser: me, remoteUsers: peers = [] } = worldRef.current || {};
-      const { audioRadius: radius, speakerMuted: spkMuted } = propsRef.current;
+      const { audioRadius: radius, speakerMuted: spkMuted, avatarReactions: reactions = [] } = propsRef.current;
 
       // 1. Floor background: Sophisticated Dark Theme (#111827)
       ctx.fillStyle = "#111827";
@@ -259,7 +263,88 @@ function OfficeCanvas({
         ctx.fillStyle = isLocal ? "#5EEAD4" : "#F3F4F6";
         ctx.textAlign = "center";
         ctx.fillText(labelText, av.x, badgeY + 13);
+
+        // Hand Raise Badge (✋)
+        if (av.handRaised) {
+          const handY = badgeY - 14;
+          ctx.fillStyle = "rgba(245, 158, 11, 0.9)";
+          ctx.beginPath();
+          ctx.arc(av.x, handY, 10, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#FFFFFF";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          ctx.font = "12px sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText("✋", av.x, handY);
+          ctx.textBaseline = "alphabetic";
+        }
+
+        // Screen Share presenter tag
+        if (av.isSharingScreen) {
+          ctx.fillStyle = "#10B981";
+          ctx.font = "bold 9px Inter, system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("🖥️ PRESENTING", av.x, av.y + OFFICE_CONFIG.avatarRadius + 14);
+        }
       }
+
+      // 8. Render Floating Temporary Emoji Reactions above Avatars
+      const nowMs = Date.now();
+      for (const reaction of reactions) {
+        const elapsed = nowMs - reaction.timestamp;
+        if (elapsed < 2500) {
+          const progress = elapsed / 2500; // 0.0 to 1.0
+          // Find avatar position
+          const targetAv = (me && (me.userId === reaction.userId || me.id === reaction.userId))
+            ? me
+            : peers.find((p) => p.userId === reaction.userId || p.id === reaction.userId);
+
+          const startX = targetAv ? targetAv.x : reaction.x || 200;
+          const startY = targetAv ? targetAv.y - 35 : reaction.y || 200;
+          const floatY = startY - progress * 40;
+          const alpha = Math.max(0, 1 - progress);
+
+          ctx.save();
+          ctx.globalAlpha = alpha;
+
+          // Bubble shadow & circle
+          ctx.fillStyle = "rgba(17, 24, 39, 0.9)";
+          ctx.beginPath();
+          ctx.arc(startX, floatY, 15, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#818CF8";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          // Emoji glyph
+          ctx.font = "16px sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(reaction.emoji, startX, floatY + 1);
+
+          ctx.restore();
+        }
+      }
+
+      // 9. Canvas Performance Monitor Badge (60 FPS target)
+      const perf = perfMonitor.update();
+      ctx.fillStyle = "rgba(17, 24, 39, 0.85)";
+      ctx.beginPath();
+      ctx.roundRect(OFFICE_CONFIG.width - 125, 10, 115, 22, 6);
+      ctx.fill();
+      ctx.strokeStyle = "#374151";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.font = "bold 10px monospace";
+      ctx.fillStyle = perf.fps >= 50 ? "#10B981" : "#F59E0B";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`${perf.fps} FPS • ${perf.frameTime}ms`, OFFICE_CONFIG.width - 67, 21);
+      ctx.textBaseline = "alphabetic";
 
       animationId = requestAnimationFrame(drawScene);
     }

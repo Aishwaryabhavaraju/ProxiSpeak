@@ -228,6 +228,17 @@
   transition: all 0.15s ease;
 }
 
+.v-btn-schedule {
+  background: rgba(129, 140, 248, 0.15);
+  border: 1px solid #818CF8;
+  color: #818CF8;
+}
+
+.v-btn-schedule:hover {
+  background: rgba(129, 140, 248, 0.25);
+  color: #C7D2FE;
+}
+
 .v-btn-exit {
   background: #273449;
   border: 1px solid #374151;

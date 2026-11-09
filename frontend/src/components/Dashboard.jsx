@@ -13,10 +13,11 @@ import {
   ArrowRight,
   Radio,
   Building,
+  Calendar,
 } from "lucide-react";
 import "../styles/Dashboard.css";
 
-export default function Dashboard({ user, onEnterRoom, onLogout }) {
+export default function Dashboard({ user, onEnterRoom, onLogout, onOpenScheduler }) {
   const [activeTab, setActiveTab] = useState("create"); // "create" | "join"
   const [roomName, setRoomName] = useState("");
   const [roomDescription, setRoomDescription] = useState("");
@@ -145,6 +146,18 @@ export default function Dashboard({ user, onEnterRoom, onLogout }) {
               <span className="dash-user-handle">@{user?.username || "online"}</span>
             </div>
           </div>
+
+          {onOpenScheduler && (
+            <button
+              type="button"
+              className="dash-schedule-btn"
+              onClick={onOpenScheduler}
+              title="Schedule or view meetings"
+            >
+              <Calendar size={15} />
+              <span>Meetings</span>
+            </button>
+          )}
 
           <button
             type="button"

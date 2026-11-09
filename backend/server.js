@@ -10,6 +10,12 @@ const mongoose = require("mongoose");
 const { randomUUID } = require("crypto");
 const { authRouter } = require("./routes/authRoutes");
 const roomRouter = require("./routes/roomRoutes");
+const officeLayoutRouter = require("./routes/officeLayoutRoutes");
+const meetingRouter = require("./routes/meetingRoutes");
+const chatRouter = require("./routes/chatRoutes");
+const ChatMessage = require("./models/ChatMessage");
+const OfficeLayout = require("./models/OfficeLayout");
+const { createSpatialAudioService } = require("./services/spatialAudioService");
 const http = require("http");
 const { Server } = require("socket.io");
 const { calculateDistance } = require("./utils/proximity");
@@ -43,13 +49,19 @@ const io = new Server(httpServer, {
   },
 });
 
+const spatialAudioService = createSpatialAudioService(io);
+const roomLayoutCache = new Map();
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Authentication and Room API routes
+// ProxiSpeak Core & Feature API routes
 app.use("/api/auth", authRouter);
 app.use("/api/rooms", roomRouter);
+app.use("/api/office-layouts", officeLayoutRouter);
+app.use("/api/meetings", meetingRouter);
+app.use("/api/chat", chatRouter);
 
 // Catch malformed JSON errors gracefully and return JSON instead of HTML
 app.use((err, req, res, next) => {
@@ -1175,6 +1187,9 @@ io.on("connection", (socket) => {
       muted,
       color,
       roomId,
+      handRaised: false,
+      hasVideo: false,
+      isSharingScreen: false,
     };
 
     if (!roomMembers.has(roomId)) {
@@ -1187,6 +1202,19 @@ io.on("connection", (socket) => {
       position: [x, y],
     });
     proximityState.positions.set(cleanUserId, [x, y]);
+
+    // Cache office layout furniture in memory for fast obstruction detection
+    if (mongoose.connection && mongoose.connection.readyState === 1 && !roomLayoutCache.has(roomId)) {
+      OfficeLayout.findOne({ roomId })
+        .select("furniture")
+        .lean()
+        .then((layout) => {
+          if (layout && layout.furniture) {
+            roomLayoutCache.set(roomId, layout.furniture);
+          }
+        })
+        .catch(() => {});
+    }
 
     if (mongoose.connection && mongoose.connection.readyState === 1) {
       try {
@@ -1267,6 +1295,23 @@ io.on("connection", (socket) => {
         notifyProximityEvents(events, socket);
       }
 
+      // Real-time spatial audio computation with furniture sound obstruction
+      const roomFurniture = roomLayoutCache.get(roomId) || [];
+      const currentRoomMembers = getRoomUsers(roomId);
+      if (currentRoomMembers && currentRoomMembers.length > 1) {
+        try {
+          spatialAudioService.updateSpatialAudio({
+            userId: userState.userId,
+            roomId,
+            position,
+            nearbyPeers: currentRoomMembers,
+            furniture: roomFurniture,
+          });
+        } catch (spatialErr) {
+          // Non-blocking spatial calculation
+        }
+      }
+
       if (mongoose.connection && mongoose.connection.readyState === 1) {
         Avatar.updateOne(
           { userId: userState.userId },
@@ -1297,7 +1342,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("chat:message", (data = {}) => {
+  socket.on("chat:message", async (data = {}) => {
     const roomId = data.roomId || socketRooms.get(socket.id);
     const text = String(data.text || data.message || "").trim();
     if (!roomId || !text) return;
@@ -1305,19 +1350,189 @@ io.on("connection", (socket) => {
     const members = roomMembers.get(roomId);
     const sender = members?.get(socket.id);
     const username = data.username || sender?.username || "Anonymous";
+    const senderId = sender?.userId || socket.data.userId || socket.id;
+    const messageId = data.id || data.messageId || randomUUID();
+    const color = data.color || sender?.color || "#818CF8";
 
     const chatPayload = {
-      id: randomUUID(),
+      id: messageId,
+      messageId,
       roomId,
-      senderId: socket.id,
-      userId: sender?.userId || socket.id,
+      senderId,
+      userId: senderId,
       username,
-      color: sender?.color || "#818CF8",
+      color,
       text,
+      reactions: {},
       timestamp: new Date().toISOString(),
     };
 
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      try {
+        await ChatMessage.create({
+          messageId,
+          type: "room",
+          roomId,
+          senderId,
+          senderUsername: username,
+          senderColor: color,
+          text,
+          reactions: {},
+        });
+      } catch (dbErr) {
+        // Non-blocking DB write
+      }
+    }
+
     io.to(roomId).emit("chat:message", chatPayload);
+  });
+
+  // Chat message reactions (toggle emoji reaction)
+  socket.on("chat:reaction", async (data = {}) => {
+    const { messageId, emoji, username } = data || {};
+    const roomId = data.roomId || socketRooms.get(socket.id);
+    if (!messageId || !emoji || !username) return;
+
+    let reactionsObj = {};
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      try {
+        const msg = await ChatMessage.findOne({ messageId });
+        if (msg) {
+          const rMap = msg.reactions || new Map();
+          const users = rMap.get(emoji) || [];
+          const idx = users.indexOf(username);
+          if (idx > -1) {
+            users.splice(idx, 1);
+          } else {
+            users.push(username);
+          }
+          if (users.length === 0) {
+            rMap.delete(emoji);
+          } else {
+            rMap.set(emoji, users);
+          }
+          msg.reactions = rMap;
+          await msg.save();
+          reactionsObj = Object.fromEntries(msg.reactions);
+        }
+      } catch (dbErr) {
+        console.warn("Reaction update error:", dbErr.message);
+      }
+    }
+
+    if (roomId) {
+      io.to(roomId).emit("chat:reaction", {
+        messageId,
+        emoji,
+        username,
+        reactions: reactionsObj,
+      });
+    }
+  });
+
+  // Direct 1-to-1 messaging
+  socket.on("chat:direct-message", async (data = {}) => {
+    const { recipientId, text, recipientUsername } = data || {};
+    const senderId = socket.data.userId || socket.id;
+    const senderUsername = socket.data.username || senderId;
+    if (!senderId || !recipientId || !text || !text.trim()) return;
+
+    const messageId = data.id || data.messageId || randomUUID();
+    const payload = {
+      id: messageId,
+      messageId,
+      type: "direct",
+      senderId,
+      senderUsername,
+      senderColor: data.senderColor || "#818CF8",
+      recipientId: String(recipientId).trim(),
+      recipientUsername: recipientUsername || recipientId,
+      text: text.trim(),
+      timestamp: new Date().toISOString(),
+      reactions: {},
+      read: false,
+    };
+
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      try {
+        await ChatMessage.create({
+          messageId,
+          type: "direct",
+          senderId,
+          senderUsername,
+          senderColor: payload.senderColor,
+          recipientId: payload.recipientId,
+          recipientUsername: payload.recipientUsername,
+          text: payload.text,
+          reactions: {},
+        });
+      } catch (e) {
+        console.warn("Failed to save direct message:", e.message);
+      }
+    }
+
+    // Send to sender
+    socket.emit("chat:direct-message", payload);
+
+    // Send to recipient if online
+    const recipientSocketId = userSockets.get(payload.recipientId);
+    if (recipientSocketId) {
+      io.to(recipientSocketId).emit("chat:direct-message", payload);
+    }
+  });
+
+  // User Hand Raise status toggle
+  socket.on("user:hand-raise", (data = {}) => {
+    const roomId = socketRooms.get(socket.id);
+    if (!roomId) return;
+    const members = roomMembers.get(roomId);
+    if (!members || !members.has(socket.id)) return;
+
+    const userState = members.get(socket.id);
+    const raised = Boolean(data.raised);
+    userState.handRaised = raised;
+
+    io.to(roomId).emit("user:hand-raise", {
+      userId: userState.userId,
+      socketId: socket.id,
+      handRaised: raised,
+    });
+  });
+
+  // Temporary floating emoji reactions above avatar on canvas
+  socket.on("avatar:reaction", (data = {}) => {
+    const roomId = socketRooms.get(socket.id);
+    if (!roomId) return;
+    const userId = socket.data.userId || socket.id;
+    const emoji = data.emoji;
+    if (!emoji) return;
+
+    io.to(roomId).emit("avatar:reaction", {
+      userId,
+      emoji,
+      timestamp: Date.now(),
+    });
+  });
+
+  // Media state changes (Camera toggle, Screen Share toggle)
+  socket.on("webrtc:media-state", (data = {}) => {
+    const roomId = socketRooms.get(socket.id);
+    if (!roomId) return;
+    const members = roomMembers.get(roomId);
+    if (!members || !members.has(socket.id)) return;
+
+    const userState = members.get(socket.id);
+    if (data.hasVideo !== undefined) userState.hasVideo = Boolean(data.hasVideo);
+    if (data.isSharingScreen !== undefined) userState.isSharingScreen = Boolean(data.isSharingScreen);
+    if (data.muted !== undefined) userState.muted = Boolean(data.muted);
+
+    socket.to(roomId).emit("webrtc:media-state", {
+      userId: userState.userId,
+      socketId: socket.id,
+      hasVideo: userState.hasVideo,
+      isSharingScreen: userState.isSharingScreen,
+      muted: userState.muted,
+    });
   });
 
   const handleLeaveOffice = () => {
@@ -1491,4 +1706,6 @@ module.exports = {
   publishProximityTransition,
   closeRedis,
   isRedisInitialized,
+  spatialAudioService,
+  roomLayoutCache,
 };

@@ -9,6 +9,7 @@ import {
   Wifi,
   WifiOff,
   AlertTriangle,
+  Calendar,
 } from "lucide-react";
 import "../styles/OfficeHeader.css";
 
@@ -21,6 +22,7 @@ export default function OfficeHeader({
   nearbyCount = 0,
   onExitOffice,
   onLogout,
+  onOpenScheduler,
 }) {
   const [copied, setCopied] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
@@ -112,6 +114,19 @@ export default function OfficeHeader({
           <div className="v-user-tag">
             <span className="v-user-tag-text">@{username}</span>
           </div>
+
+          {/* Schedule / Meetings Button */}
+          {onOpenScheduler && (
+            <button
+              type="button"
+              className="v-header-btn v-btn-schedule"
+              onClick={onOpenScheduler}
+              title="Schedule or view upcoming meetings"
+            >
+              <Calendar size={15} />
+              <span>Meetings</span>
+            </button>
+          )}
 
           {/* Exit Office Button */}
           <button

@@ -197,3 +197,64 @@
   font-size: 11px;
 }
 
+/* User Card Container & Custom Actions */
+.user-card-container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.user-hand-icon {
+  margin-left: 4px;
+  font-size: 13px;
+  animation: pulse 1.5s infinite;
+}
+
+.user-screen-icon {
+  margin-left: 4px;
+  color: #10B981;
+}
+
+.user-action-btn {
+  background: transparent;
+  border: none;
+  color: #9CA3AF;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.user-action-btn:hover,
+.user-action-btn.active {
+  color: #818CF8;
+  background: #1E293B;
+}
+
+.user-individual-volume-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: #111827;
+  border-radius: 6px;
+  border: 1px solid #374151;
+  gap: 10px;
+}
+
+.individual-vol-label {
+  font-size: 11px;
+  color: #9CA3AF;
+  white-space: nowrap;
+}
+
+.individual-vol-slider {
+  flex: 1;
+  height: 4px;
+  accent-color: #818CF8;
+  cursor: pointer;
+}
+

@@ -104,6 +104,26 @@
   color: #9CA3AF;
 }
 
+.dash-schedule-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(129, 140, 248, 0.15);
+  border: 1px solid #818CF8;
+  border-radius: 8px;
+  padding: 7px 12px;
+  color: #818CF8;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.dash-schedule-btn:hover {
+  background: rgba(129, 140, 248, 0.25);
+  color: #C7D2FE;
+}
+
 .dash-logout-btn {
   display: flex;
   align-items: center;

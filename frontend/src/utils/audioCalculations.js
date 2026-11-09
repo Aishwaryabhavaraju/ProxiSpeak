@@ -1,8 +1,14 @@
 /**
- * Linear volume attenuation based on distance and configurable audio radius.
- * Formula: gain = max(0, 1 - distance / maxDistance)
+ * Distance-based volume attenuation with obstruction and quadratic falloff support.
+ * Linear formula: gain = max(0, 1 - distance / maxDistance) * (isObstructed ? 0.25 : 1)
+ * Quadratic formula: gain = max(0, (1 - distance / maxDistance)^2) * (isObstructed ? 0.25 : 1)
  */
-export function calculateVolume(distance, maxDistance = 100) {
+export function calculateVolume(
+  distance,
+  maxDistance = 100,
+  isObstructed = false,
+  useQuadratic = false
+) {
   if (
     typeof distance !== "number" ||
     Number.isNaN(distance) ||
@@ -16,8 +22,21 @@ export function calculateVolume(distance, maxDistance = 100) {
     return 0;
   }
   const safeDistance = Math.max(0, distance);
-  const rawGain = 1 - safeDistance / maxDistance;
+  const linear = Math.max(0, 1 - safeDistance / maxDistance);
+  const obstructionFactor = isObstructed ? 0.25 : 1;
+  const rawGain = (useQuadratic ? Math.pow(linear, 2) : linear) * obstructionFactor;
   return Math.max(0, Math.min(1, rawGain));
+}
+
+/**
+ * Direct quadratic distance attenuation for realistic acoustic falloff.
+ */
+export function calculateQuadraticVolume(
+  distance,
+  maxDistance = 100,
+  isObstructed = false
+) {
+  return calculateVolume(distance, maxDistance, isObstructed, true);
 }
 
 /**

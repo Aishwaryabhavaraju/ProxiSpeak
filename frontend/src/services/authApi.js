@@ -1,8 +1,10 @@
-const API_BASE =
+export const API_BASE =
   (typeof import.meta !== "undefined" &&
     import.meta.env &&
     import.meta.env.VITE_API_URL) ||
   "http://localhost:5000";
+
+export const API_BASE_URL = `${API_BASE}/api`;
 
 const TOKEN_KEY = "proxispeak_token";
 const USER_KEY = "proxispeak_user";

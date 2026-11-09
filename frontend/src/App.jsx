@@ -5,9 +5,12 @@ import OfficeHeader from "./components/OfficeHeader";
 import OfficeCanvas from "./components/OfficeCanvas";
 import UserList from "./components/UserList";
 import TeamChat from "./components/TeamChat";
+import DirectMessages from "./components/DirectMessages";
+import VideoGrid from "./components/VideoGrid";
+import MeetingModal from "./components/MeetingModal";
 import AudioControls from "./components/AudioControls";
 import Toolbar from "./components/Toolbar";
-import { MessageSquare, Users } from "lucide-react";
+import { MessageSquare, Users, MessageCircle } from "lucide-react";
 import { OFFICE_CONFIG } from "./utils/officeLayout";
 import {
   stepAvatarMovement,
@@ -19,6 +22,8 @@ import {
 import { useMicrophone } from "./hooks/useMicrophone";
 import { useSpatialAudio } from "./hooks/useSpatialAudio";
 import { useSocket } from "./hooks/useSocket";
+import { audioEngine } from "./services/audioEngine";
+import { webrtcManager } from "./services/webrtc";
 import { getStoredUser, clearAuthData } from "./services/authApi";
 import "./styles/Office.css";
 
@@ -26,12 +31,34 @@ export default function App() {
   // Authentication & Workspace State Machine
   const [currentUser, setCurrentUser] = useState(() => getStoredUser());
   const [currentRoom, setCurrentRoom] = useState(null); // { roomId, name, description }
-  const [activeSidebarTab, setActiveSidebarTab] = useState("chat"); // "chat" | "users"
+  const [activeSidebarTab, setActiveSidebarTab] = useState("chat"); // "chat" | "direct" | "users"
   const [chatMessages, setChatMessages] = useState([]);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
 
+  // Direct Messaging States
+  const [directMessages, setDirectMessages] = useState([]);
+  const [unreadDmCounts, setUnreadDmCounts] = useState({});
+
+  // Video & Screen Sharing States
+  const [videoEnabled, setVideoEnabled] = useState(false);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [localVideoTrack, setLocalVideoTrack] = useState(null);
+  const [localScreenTrack, setLocalScreenTrack] = useState(null);
+  const [remoteVideoStreams, setRemoteVideoStreams] = useState({});
+
+  // Hand Raise & Avatar Reactions
+  const [handRaised, setHandRaised] = useState(false);
+  const [avatarReactions, setAvatarReactions] = useState([]);
+
+  // Audio Controls & PTT States
   const [audioRadius, setAudioRadius] = useState(OFFICE_CONFIG.defaultAudioRadius);
+  const [masterVolume, setMasterVolume] = useState(100);
+  const [peerVolumes, setPeerVolumes] = useState({});
+  const [isPushToTalk, setIsPushToTalk] = useState(false);
   const [localAutoWalk, setLocalAutoWalk] = useState(false);
+
+  // Meeting Scheduler Modal State
+  const [isMeetingModalOpen, setIsMeetingModalOpen] = useState(false);
 
   // Mutable 60fps world state
   const worldRef = useRef({
@@ -46,6 +73,9 @@ export default function App() {
       muted: true,
       isLocal: true,
       color: currentUser?.avatarColor || "#818CF8",
+      handRaised: false,
+      hasVideo: false,
+      isSharingScreen: false,
     },
     remoteUsers: [],
   });
@@ -68,6 +98,15 @@ export default function App() {
       };
     }
   }, [currentUser]);
+
+  // Clean expired floating avatar reactions every 1 second
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setAvatarReactions((prev) => prev.filter((r) => now - r.timestamp < 2600));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const handleAssignedIdentity = useCallback((identity) => {
     if (!identity || !identity.id) return;
@@ -109,6 +148,9 @@ export default function App() {
           direction: u.direction || 0,
           muted: Boolean(u.muted),
           color: u.color || u.avatarColor || existing?.color || "#5EEAD4",
+          handRaised: Boolean(u.handRaised),
+          hasVideo: Boolean(u.hasVideo),
+          isSharingScreen: Boolean(u.isSharingScreen),
           isBot: false,
         };
       });
@@ -149,6 +191,9 @@ export default function App() {
           direction: newUser.direction || 0,
           muted: Boolean(newUser.muted),
           color: newUser.color || newUser.avatarColor || "#5EEAD4",
+          handRaised: Boolean(newUser.handRaised),
+          hasVideo: Boolean(newUser.hasVideo),
+          isSharingScreen: Boolean(newUser.isSharingScreen),
           isBot: false,
         },
       ];
@@ -159,17 +204,76 @@ export default function App() {
     worldRef.current.remoteUsers = worldRef.current.remoteUsers.filter(
       (u) => u.id !== leftId && u.userId !== leftId
     );
+    setRemoteVideoStreams((prev) => {
+      const next = { ...prev };
+      delete next[leftId];
+      return next;
+    });
   }, []);
 
   const handleChatMessage = useCallback((msg) => {
     setChatMessages((prev) => [...prev, msg]);
-    // Increment unread badge if currently viewing users tab
     setActiveSidebarTab((currentTab) => {
       if (currentTab !== "chat") {
         setUnreadChatCount((count) => count + 1);
       }
       return currentTab;
     });
+  }, []);
+
+  const handleChatReaction = useCallback((data) => {
+    setChatMessages((prev) =>
+      prev.map((m) =>
+        (m.id === data.messageId || m.messageId === data.messageId)
+          ? { ...m, reactions: data.reactions }
+          : m
+      )
+    );
+  }, []);
+
+  const handleDirectMessage = useCallback((msg) => {
+    setDirectMessages((prev) => [...prev, msg]);
+    const sender = msg.senderId || msg.senderUsername;
+    setActiveSidebarTab((currentTab) => {
+      if (currentTab !== "direct") {
+        setUnreadDmCounts((prev) => ({
+          ...prev,
+          [sender]: (prev[sender] || 0) + 1,
+        }));
+      }
+      return currentTab;
+    });
+  }, []);
+
+  const handleHandRaise = useCallback((data) => {
+    const { userId, handRaised: raised } = data;
+    worldRef.current.remoteUsers = worldRef.current.remoteUsers.map((u) =>
+      u.userId === userId || u.id === userId ? { ...u, handRaised: raised } : u
+    );
+  }, []);
+
+  const handleAvatarReaction = useCallback((data) => {
+    const rx = {
+      id: Math.random().toString(36).slice(2, 9),
+      userId: data.userId,
+      emoji: data.emoji,
+      timestamp: data.timestamp || Date.now(),
+    };
+    setAvatarReactions((prev) => [...prev, rx]);
+  }, []);
+
+  const handleMediaState = useCallback((data) => {
+    const { userId, hasVideo: video, isSharingScreen: screen, muted: isMuted } = data;
+    worldRef.current.remoteUsers = worldRef.current.remoteUsers.map((u) =>
+      u.userId === userId || u.id === userId
+        ? {
+            ...u,
+            hasVideo: video !== undefined ? video : u.hasVideo,
+            isSharingScreen: screen !== undefined ? screen : u.isSharingScreen,
+            muted: isMuted !== undefined ? isMuted : u.muted,
+          }
+        : u
+    );
   }, []);
 
   const {
@@ -179,6 +283,11 @@ export default function App() {
     emitPositionUpdate,
     emitMuteStatus,
     sendChatMessage,
+    sendChatReaction,
+    sendDirectMessage,
+    emitHandRaise,
+    emitAvatarReaction,
+    emitMediaState,
   } = useSocket({
     username: currentUser?.username,
     userId: currentUser?.username,
@@ -191,6 +300,11 @@ export default function App() {
     onUserJoined: handleUserJoined,
     onUserLeft: handleUserLeft,
     onChatMessage: handleChatMessage,
+    onChatReaction: handleChatReaction,
+    onDirectMessage: handleDirectMessage,
+    onHandRaise: handleHandRaise,
+    onAvatarReaction: handleAvatarReaction,
+    onMediaState: handleMediaState,
   });
 
   const handleMuteChanged = useCallback(
@@ -215,6 +329,30 @@ export default function App() {
     stopMicrophone,
   } = useMicrophone({ onMuteChanged: handleMuteChanged });
 
+  // WebRTC remote video hook initialization
+  useEffect(() => {
+    webrtcManager.onRemoteVideoTrack = (peerId, track, stream) => {
+      const peer = worldRef.current.remoteUsers.find((u) => u.id === peerId || u.userId === peerId);
+      setRemoteVideoStreams((prev) => ({
+        ...prev,
+        [peerId]: {
+          stream,
+          username: peer?.username || peerId,
+          isMuted: peer?.muted || false,
+          isScreen: track.label?.toLowerCase().includes("screen") || false,
+        },
+      }));
+    };
+
+    webrtcManager.onRemoteVideoTrackEnded = (peerId) => {
+      setRemoteVideoStreams((prev) => {
+        const next = { ...prev };
+        delete next[peerId];
+        return next;
+      });
+    };
+  }, []);
+
   // Connect socket whenever currentRoom is active
   useEffect(() => {
     if (currentUser && currentRoom) {
@@ -238,6 +376,137 @@ export default function App() {
     };
   }, [micMuted, micEnabled]);
 
+  // Master Volume adjustments
+  const handleMasterVolumeChange = useCallback((vol) => {
+    setMasterVolume(vol);
+    audioEngine.setMasterVolume(vol / 100);
+  }, []);
+
+  // Individual Peer Volume adjustments
+  const handlePeerVolumeChange = useCallback((peerId, vol) => {
+    setPeerVolumes((prev) => ({ ...prev, [peerId]: vol }));
+    audioEngine.setPeerVolume(peerId, vol);
+  }, []);
+
+  // Push-to-Talk Keyboard Spacebar Handling (with typing avoidance)
+  useEffect(() => {
+    if (!isPushToTalk || !micEnabled) return undefined;
+
+    function isUserTyping() {
+      const tag = document.activeElement?.tagName?.toLowerCase();
+      return tag === "input" || tag === "textarea" || document.activeElement?.isContentEditable;
+    }
+
+    function handleKeyDown(e) {
+      if (e.code === "Space" && !isUserTyping() && !e.repeat) {
+        e.preventDefault();
+        if (micMuted) {
+          toggleMicMute();
+        }
+      }
+    }
+
+    function handleKeyUp(e) {
+      if (e.code === "Space" && !isUserTyping()) {
+        e.preventDefault();
+        if (!micMuted) {
+          toggleMicMute();
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, [isPushToTalk, micEnabled, micMuted, toggleMicMute]);
+
+  // Camera Toggle
+  const handleToggleVideo = async () => {
+    if (videoEnabled) {
+      if (localVideoTrack) {
+        localVideoTrack.stop();
+        setLocalVideoTrack(null);
+        webrtcManager.setLocalVideoTrack(null);
+      }
+      setVideoEnabled(false);
+      worldRef.current.localUser.hasVideo = false;
+      emitMediaState({ hasVideo: false });
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 480, height: 360, frameRate: 24 },
+        });
+        const track = stream.getVideoTracks()[0];
+        setLocalVideoTrack(track);
+        webrtcManager.setLocalVideoTrack(track);
+        setVideoEnabled(true);
+        worldRef.current.localUser.hasVideo = true;
+        emitMediaState({ hasVideo: true });
+      } catch (err) {
+        console.warn("Camera access denied or failed:", err.message);
+      }
+    }
+  };
+
+  // Screen Share Toggle
+  const handleToggleScreenShare = async () => {
+    if (isScreenSharing) {
+      if (localScreenTrack) {
+        localScreenTrack.stop();
+        setLocalScreenTrack(null);
+        webrtcManager.setScreenShareTrack(null);
+      }
+      setIsScreenSharing(false);
+      worldRef.current.localUser.isSharingScreen = false;
+      emitMediaState({ isSharingScreen: false });
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true,
+        });
+        const track = stream.getVideoTracks()[0];
+        track.onended = () => {
+          setIsScreenSharing(false);
+          setLocalScreenTrack(null);
+          webrtcManager.setScreenShareTrack(null);
+          worldRef.current.localUser.isSharingScreen = false;
+          emitMediaState({ isSharingScreen: false });
+        };
+        setLocalScreenTrack(track);
+        webrtcManager.setScreenShareTrack(track);
+        setIsScreenSharing(true);
+        worldRef.current.localUser.isSharingScreen = true;
+        emitMediaState({ isSharingScreen: true });
+      } catch (err) {
+        console.warn("Screen share cancelled or failed:", err.message);
+      }
+    }
+  };
+
+  // Hand Raise Toggle
+  const handleToggleHandRaise = () => {
+    const next = !handRaised;
+    setHandRaised(next);
+    worldRef.current.localUser.handRaised = next;
+    emitHandRaise(next);
+  };
+
+  // Avatar Reaction Dispatch
+  const handleSendAvatarReaction = (emoji) => {
+    const rx = {
+      id: Math.random().toString(36).slice(2, 9),
+      userId: currentUser?.username || worldRef.current.localUser.id,
+      emoji,
+      timestamp: Date.now(),
+    };
+    setAvatarReactions((prev) => [...prev, rx]);
+    emitAvatarReaction(emoji);
+  };
+
   // 60 FPS Physics & Movement Loop
   useEffect(() => {
     if (!currentRoom) return undefined;
@@ -248,109 +517,85 @@ export default function App() {
       const dt = Math.min(Math.max((now - lastTime) / 1000, 0.001), 0.1);
       lastTime = now;
 
-      let me = worldRef.current.localUser;
-      const keys = keysPressedRef.current;
-      let keyVx = 0;
-      let keyVy = 0;
-      if (keys.has("ArrowUp") || keys.has("KeyW")) keyVy -= 1;
-      if (keys.has("ArrowDown") || keys.has("KeyS")) keyVy += 1;
-      if (keys.has("ArrowLeft") || keys.has("KeyA")) keyVx -= 1;
-      if (keys.has("ArrowRight") || keys.has("KeyD")) keyVx += 1;
+      // Local Avatar movement
+      const local = worldRef.current.localUser;
+      if (local) {
+        let moved = false;
+        let newX = local.x;
+        let newY = local.y;
+        let dir = local.direction;
 
-      if (keyVx !== 0 || keyVy !== 0) {
-        const len = Math.hypot(keyVx, keyVy);
-        const speed = 135;
-        const dx = (keyVx / len) * speed * dt;
-        const dy = (keyVy / len) * speed * dt;
-        const moved = moveWithSliding(
-          me.x,
-          me.y,
-          dx,
-          dy,
-          OFFICE_CONFIG.avatarRadius,
-          OFFICE_CONFIG
-        );
-        const angle = Math.atan2(dy, dx);
-        me = {
-          ...me,
-          x: moved.x,
-          y: moved.y,
-          targetX: moved.x,
-          targetY: moved.y,
-          direction: angle,
-        };
-        emitPositionUpdate(me.x, me.y, angle, me.muted);
-      } else if (localAutoWalk) {
-        me = stepAvatarMovement(me, dt, 75, OFFICE_CONFIG);
-        emitPositionUpdate(me.x, me.y, me.direction, me.muted);
-      } else {
-        const dx = me.targetX - me.x;
-        const dy = me.targetY - me.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist > 2) {
-          const step = Math.min(dist, 120 * dt);
-          const angle = Math.atan2(dy, dx);
-          const moved = moveWithSliding(
-            me.x,
-            me.y,
-            Math.cos(angle) * step,
-            Math.sin(angle) * step,
-            OFFICE_CONFIG.avatarRadius,
-            OFFICE_CONFIG
-          );
-          if (moved.blocked) {
-            me = { ...me, targetX: me.x, targetY: me.y };
-          } else {
-            me = { ...me, x: moved.x, y: moved.y, direction: angle };
-            emitPositionUpdate(me.x, me.y, angle, me.muted);
+        // Auto-walk circuit mode
+        if (localAutoWalk) {
+          const t = now / 3000;
+          const targetX = 500 + Math.sin(t) * 180;
+          const targetY = 320 + Math.cos(t) * 120;
+          const res = stepAvatarMovement(local.x, local.y, targetX, targetY, dt, 140);
+          newX = res.x;
+          newY = res.y;
+          dir = res.direction;
+          moved = res.moved;
+        } else {
+          // Keyboard controls (WASD & Arrow keys)
+          let kx = 0;
+          let ky = 0;
+          if (keysPressedRef.current.has("KeyW") || keysPressedRef.current.has("ArrowUp")) ky -= 1;
+          if (keysPressedRef.current.has("KeyS") || keysPressedRef.current.has("ArrowDown")) ky += 1;
+          if (keysPressedRef.current.has("KeyA") || keysPressedRef.current.has("ArrowLeft")) kx -= 1;
+          if (keysPressedRef.current.has("KeyD") || keysPressedRef.current.has("ArrowRight")) kx += 1;
+
+          if (kx !== 0 || ky !== 0) {
+            const mag = Math.hypot(kx, ky);
+            const speed = 160;
+            const stepX = (kx / mag) * speed * dt;
+            const stepY = (ky / mag) * speed * dt;
+            const slide = moveWithSliding(local.x, local.y, stepX, stepY);
+            newX = slide.x;
+            newY = slide.y;
+            dir = Math.atan2(ky, kx);
+            moved = true;
+            local.targetX = newX;
+            local.targetY = newY;
+          } else if (
+            typeof local.targetX === "number" &&
+            (local.targetX !== local.x || local.targetY !== local.y)
+          ) {
+            // Target click movement
+            const res = stepAvatarMovement(local.x, local.y, local.targetX, local.targetY, dt, 160);
+            newX = res.x;
+            newY = res.y;
+            dir = res.direction;
+            moved = res.moved;
           }
         }
-      }
-      worldRef.current.localUser = me;
 
-      // Smooth interpolation for remote avatars
-      worldRef.current.remoteUsers = worldRef.current.remoteUsers.map((peer) =>
-        interpolateRemoteAvatar(peer, dt, 10)
-      );
+        if (moved) {
+          local.x = newX;
+          local.y = newY;
+          local.direction = dir;
+          emitPositionUpdate(newX, newY, dir, local.muted);
+        }
+      }
+
+      // Interpolate remote avatars
+      for (const peer of worldRef.current.remoteUsers) {
+        if (typeof peer.serverX === "number") {
+          const interp = interpolateRemoteAvatar(peer.x, peer.y, peer.serverX, peer.serverY, dt);
+          peer.x = interp.x;
+          peer.y = interp.y;
+        }
+      }
 
       frameId = requestAnimationFrame(tick);
     }
 
     frameId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frameId);
-  }, [currentRoom, localAutoWalk, emitPositionUpdate]);
-
-  // Throttled 10 Hz UI snapshot sync for sidebar
-  useEffect(() => {
-    if (!currentRoom) return undefined;
-    const timer = setInterval(() => {
-      setUiSnapshot({
-        localUser: { ...worldRef.current.localUser },
-        remoteUsers: worldRef.current.remoteUsers.map((u) => ({ ...u })),
-      });
-    }, 100);
-    return () => clearInterval(timer);
-  }, [currentRoom]);
-
-  // Held-key listener for WASD and Arrows
-  useEffect(() => {
-    if (!currentRoom) return undefined;
-    const navCodes = new Set([
-      "ArrowUp",
-      "ArrowDown",
-      "ArrowLeft",
-      "ArrowRight",
-      "KeyW",
-      "KeyA",
-      "KeyS",
-      "KeyD",
-    ]);
 
     function handleKeyDown(e) {
-      if (["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) return;
-      if (navCodes.has(e.code)) {
+      const tag = e.target?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea") return;
+      if (["KeyW", "KeyS", "KeyA", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) {
         e.preventDefault();
-        setLocalAutoWalk(false);
         keysPressedRef.current.add(e.code);
       }
     }
@@ -359,23 +604,30 @@ export default function App() {
       keysPressedRef.current.delete(e.code);
     }
 
-    function handleBlur() {
-      keysPressedRef.current.clear();
-    }
-
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
-    window.addEventListener("blur", handleBlur);
+
     return () => {
+      cancelAnimationFrame(frameId);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
-      window.removeEventListener("blur", handleBlur);
     };
+  }, [currentRoom, localAutoWalk, emitPositionUpdate]);
+
+  // 10 Hz UI sync
+  useEffect(() => {
+    if (!currentRoom) return undefined;
+    const interval = setInterval(() => {
+      setUiSnapshot({
+        localUser: { ...worldRef.current.localUser },
+        remoteUsers: [...worldRef.current.remoteUsers],
+      });
+    }, 100);
+    return () => clearInterval(interval);
   }, [currentRoom]);
 
   function handleSelectLocalTarget({ x, y }) {
-    if (!checkCollision(x, y, OFFICE_CONFIG.avatarRadius, OFFICE_CONFIG)) {
-      setLocalAutoWalk(false);
+    if (worldRef.current.localUser) {
       worldRef.current.localUser = {
         ...worldRef.current.localUser,
         targetX: x,
@@ -385,10 +637,23 @@ export default function App() {
   }
 
   function handleExitOffice() {
+    if (localVideoTrack) {
+      localVideoTrack.stop();
+      setLocalVideoTrack(null);
+    }
+    if (localScreenTrack) {
+      localScreenTrack.stop();
+      setLocalScreenTrack(null);
+    }
+    setVideoEnabled(false);
+    setIsScreenSharing(false);
+    setRemoteVideoStreams({});
+    setHandRaised(false);
     stopMicrophone();
     leaveOffice();
     setCurrentRoom(null);
     setChatMessages([]);
+    setDirectMessages([]);
     worldRef.current.remoteUsers = [];
   }
 
@@ -407,6 +672,8 @@ export default function App() {
     return dist <= audioRadius;
   }).length;
 
+  const totalUnreadDms = Object.values(unreadDmCounts).reduce((a, b) => a + b, 0);
+
   // View 1: Not Authenticated -> Login / Register Screen
   if (!currentUser) {
     return <Login onAuthenticated={(user) => setCurrentUser(user)} />;
@@ -415,11 +682,21 @@ export default function App() {
   // View 2: Authenticated but Not in a Room -> Dashboard
   if (!currentRoom) {
     return (
-      <Dashboard
-        user={currentUser}
-        onEnterRoom={(room) => setCurrentRoom(room)}
-        onLogout={handleLogout}
-      />
+      <>
+        <Dashboard
+          user={currentUser}
+          onEnterRoom={(room) => setCurrentRoom(room)}
+          onLogout={handleLogout}
+          onOpenScheduler={() => setIsMeetingModalOpen(true)}
+        />
+        <MeetingModal
+          isOpen={isMeetingModalOpen}
+          onClose={() => setIsMeetingModalOpen(false)}
+          currentRoomId="MAIN-OFFICE"
+          currentUser={currentUser}
+          onJoinRoom={(room) => setCurrentRoom(room)}
+        />
+      </>
     );
   }
 
@@ -435,24 +712,45 @@ export default function App() {
         nearbyCount={nearbyUsersCount}
         onExitOffice={handleExitOffice}
         onLogout={handleLogout}
+        onOpenScheduler={() => setIsMeetingModalOpen(true)}
       />
 
       <main className="office-main-grid">
-        {/* Left: Interactive Virtual Office Canvas */}
+        {/* Left: Video Stage + Interactive Virtual Office Canvas */}
         <div className="canvas-stage-card">
+          <VideoGrid
+            localVideoTrack={localVideoTrack}
+            localScreenTrack={localScreenTrack}
+            remoteVideoStreams={remoteVideoStreams}
+            currentUsername={currentUser.username}
+            localMuted={micMuted || !micEnabled}
+            isScreenSharing={isScreenSharing}
+            onStopScreenShare={handleToggleScreenShare}
+          />
+
           <OfficeCanvas
             worldRef={worldRef}
             audioRadius={audioRadius}
             speakerMuted={speakerMuted}
             onSelectLocalTarget={handleSelectLocalTarget}
+            avatarReactions={avatarReactions}
           />
+
           <Toolbar
             localAutoWalk={localAutoWalk}
             onToggleLocalAutoWalk={() => setLocalAutoWalk((v) => !v)}
+            videoEnabled={videoEnabled}
+            onToggleVideo={handleToggleVideo}
+            isScreenSharing={isScreenSharing}
+            onToggleScreenShare={handleToggleScreenShare}
+            handRaised={handRaised}
+            onToggleHandRaise={handleToggleHandRaise}
+            onSendAvatarReaction={handleSendAvatarReaction}
+            onOpenScheduler={() => setIsMeetingModalOpen(true)}
           />
         </div>
 
-        {/* Right: Multi-tab Side Panel (Team Chat & Colleagues) + Audio Controls */}
+        {/* Right: Multi-tab Side Panel (Team Chat, Direct Messages, Colleagues) + Audio Controls */}
         <aside className="office-sidebar">
           <div className="sidebar-tab-switcher">
             <button
@@ -464,9 +762,21 @@ export default function App() {
               }}
             >
               <MessageSquare size={16} />
-              <span>Team Chat</span>
+              <span>Room Chat</span>
               {unreadChatCount > 0 && (
                 <span className="sidebar-tab-badge">{unreadChatCount}</span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              className={`sidebar-tab-btn ${activeSidebarTab === "direct" ? "active" : ""}`}
+              onClick={() => setActiveSidebarTab("direct")}
+            >
+              <MessageCircle size={16} />
+              <span>Direct</span>
+              {totalUnreadDms > 0 && (
+                <span className="sidebar-tab-badge dm-badge">{totalUnreadDms}</span>
               )}
             </button>
 
@@ -490,13 +800,30 @@ export default function App() {
                 roomName={currentRoom.name}
                 messages={chatMessages}
                 onSendMessage={sendChatMessage}
+                onSendReaction={sendChatReaction}
                 currentUsername={currentUser.username}
+              />
+            ) : activeSidebarTab === "direct" ? (
+              <DirectMessages
+                currentUsername={currentUser.username}
+                colleagues={uiSnapshot.remoteUsers}
+                directMessages={directMessages}
+                onSendDirectMessage={sendDirectMessage}
+                unreadCounts={unreadDmCounts}
+                onClearUnread={(id) =>
+                  setUnreadDmCounts((prev) => ({ ...prev, [id]: 0 }))
+                }
               />
             ) : (
               <UserList
                 localUser={uiSnapshot.localUser}
                 remoteUsers={uiSnapshot.remoteUsers}
                 spatialMetrics={spatialMetrics}
+                onSelectDM={(colleague) => {
+                  setActiveSidebarTab("direct");
+                }}
+                onPeerVolumeChange={handlePeerVolumeChange}
+                peerVolumes={peerVolumes}
               />
             )}
           </div>
@@ -507,13 +834,32 @@ export default function App() {
             speakerMuted={speakerMuted}
             micError={micError}
             audioRadius={audioRadius}
+            masterVolume={masterVolume}
+            isPushToTalk={isPushToTalk}
             onEnableMic={enableMicrophone}
             onToggleMicMute={toggleMicMute}
             onToggleSpeakerMute={toggleSpeakerMute}
             onChangeRadius={setAudioRadius}
+            onChangeMasterVolume={handleMasterVolumeChange}
+            onTogglePushToTalk={() => setIsPushToTalk((v) => !v)}
+            onPttMouseDown={() => {
+              if (micMuted) toggleMicMute();
+            }}
+            onPttMouseUp={() => {
+              if (!micMuted) toggleMicMute();
+            }}
           />
         </aside>
       </main>
+
+      {/* Meeting Scheduler Dialog */}
+      <MeetingModal
+        isOpen={isMeetingModalOpen}
+        onClose={() => setIsMeetingModalOpen(false)}
+        currentRoomId={currentRoom?.roomId || "MAIN-OFFICE"}
+        currentUser={currentUser}
+        onJoinRoom={(room) => setCurrentRoom(room)}
+      />
     </div>
   );
 }

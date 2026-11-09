@@ -11,7 +11,26 @@ class SpatialAudioEngine {
   constructor() {
     this.audioContext = null;
     this.peerNodes = new Map();
+    this.peerVolumes = new Map(); // Individual peer volume multipliers (0.0 - 2.0)
+    this.masterVolume = 1.0;      // Global master output volume (0.0 - 1.0)
     this.speakerMuted = false;
+  }
+
+  setPeerVolume(peerId, volume) {
+    const val = Number.isFinite(Number(volume)) ? Math.max(0, Math.min(2, Number(volume))) : 1.0;
+    this.peerVolumes.set(peerId, val);
+  }
+
+  getPeerVolume(peerId) {
+    return this.peerVolumes.get(peerId) ?? 1.0;
+  }
+
+  setMasterVolume(volume) {
+    this.masterVolume = Number.isFinite(Number(volume)) ? Math.max(0, Math.min(1, Number(volume))) : 1.0;
+  }
+
+  getMasterVolume() {
+    return this.masterVolume;
   }
 
   ensureContext() {
@@ -129,13 +148,19 @@ class SpatialAudioEngine {
     return entry;
   }
 
-  updatePeerSpatialParams(peerId, localUser, remoteUser, distance, audioRadius = 100) {
+  updatePeerSpatialParams(peerId, localUser, remoteUser, distance, audioRadius = 100, isObstructed = false) {
     const entry = this.peerNodes.get(peerId);
     if (!entry || !this.audioContext) return { gain: 0, pan: 0 };
 
     const isPeerMuted = Boolean(remoteUser && remoteUser.muted);
-    const targetGain =
-      this.speakerMuted || isPeerMuted ? 0 : calculateVolume(distance, audioRadius);
+    // Quadratic distance attenuation with sound obstruction factor
+    const rawGain =
+      this.speakerMuted || isPeerMuted
+        ? 0
+        : calculateVolume(distance, audioRadius, isObstructed, true);
+
+    const peerMultiplier = this.peerVolumes.get(peerId) ?? 1.0;
+    const targetGain = Math.max(0, Math.min(2.0, rawGain * peerMultiplier * this.masterVolume));
     const targetPan = calculatePan(localUser, remoteUser, audioRadius);
 
     const now = this.audioContext.currentTime;
