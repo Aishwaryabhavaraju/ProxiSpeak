@@ -221,6 +221,12 @@ class WebRTCManager {
       }
     };
 
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === "failed") {
+        pc.restartIce?.();
+      }
+    };
+
     if (isInitiator) {
       this.initiateOffer(peerId, pc);
     }
