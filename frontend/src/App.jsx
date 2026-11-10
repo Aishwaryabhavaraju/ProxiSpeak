@@ -276,17 +276,6 @@ export default function App() {
     );
   }, []);
 
-  const handleChatMessage = useCallback((msg) => {
-    setChatMessages((prev) => [...prev, msg]);
-    // Increment unread badge if currently viewing users tab
-    setActiveSidebarTab((currentTab) => {
-      if (currentTab !== "chat") {
-        setUnreadChatCount((count) => count + 1);
-      }
-      return currentTab;
-    });
-  }, []);
-
   const {
     connectionState,
     connectToBackend,
