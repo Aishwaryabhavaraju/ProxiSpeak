@@ -88,12 +88,27 @@ app.put("/api/avatars/:userId/location", async (req, res) => {
     if (x === undefined || y === undefined || !Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) {
       return res.status(400).json({ error: "x and y must be finite numbers" });
     }
+    const cleanId = userId.trim();
     const position = [Number(x), Number(y)];
+    const username = req.body.username || cleanId;
+
+    userProfiles.set(cleanId, { username, position });
+    proximityState.positions.set(cleanId, position);
+
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      return res.status(200).json({
+        userId: cleanId,
+        username,
+        position,
+        isOnline: true,
+      });
+    }
+
     const avatar = await Avatar.findOneAndUpdate(
-      { userId: userId.trim() },
+      { userId: cleanId },
       {
         $set: { position, isOnline: true },
-        $setOnInsert: { username: req.body.username || userId.trim() },
+        $setOnInsert: { username },
       },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
     );
@@ -114,7 +129,33 @@ app.get("/api/avatars/:userId/nearby", async (req, res) => {
       return res.status(400).json({ error: "A valid userId is required." });
     }
 
-    const speaker = await Avatar.findOne({ userId: userId.trim() });
+    const cleanId = userId.trim();
+
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      const speakerProfile = userProfiles.get(cleanId);
+      const speakerPos = speakerProfile?.position || proximityState.positions.get(cleanId);
+      if (!speakerPos) {
+        return res.status(404).json({ error: "Avatar not found" });
+      }
+      const avatars = [];
+      for (const [peerId, profile] of userProfiles.entries()) {
+        if (peerId !== cleanId && profile.position) {
+          const d = calculateDistance(speakerPos, profile.position);
+          if (d <= radius) {
+            avatars.push({
+              userId: peerId,
+              username: profile.username || peerId,
+              position: profile.position,
+              isOnline: true,
+              lastSeen: new Date(),
+            });
+          }
+        }
+      }
+      return res.status(200).json({ avatars: avatars.slice(0, limit) });
+    }
+
+    const speaker = await Avatar.findOne({ userId: cleanId });
     if (!speaker) {
       return res.status(404).json({ error: "Avatar not found" });
     }
@@ -143,6 +184,20 @@ app.get("/", (req, res) => {
 // GET /api/avatars - Retrieve all avatars
 app.get("/api/avatars", async (req, res) => {
   try {
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      const avatars = Array.from(userProfiles.entries()).map(([userId, p]) => ({
+        userId,
+        username: p.username || userId,
+        position: p.position || [200, 200],
+        isOnline: true,
+      }));
+      return res.status(200).json({
+        success: true,
+        count: avatars.length,
+        avatars,
+      });
+    }
+
     const avatars = await Avatar.find().sort({ updatedAt: -1 });
     res.status(200).json({
       success: true,
@@ -193,6 +248,33 @@ app.get("/api/avatars/near", async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Radius must be greater than 0 and at most 1000.",
+      });
+    }
+
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      const results = [];
+      for (const [uid, profile] of userProfiles.entries()) {
+        if (excludeUserId && uid === excludeUserId) continue;
+        const pos = profile.position || proximityState.positions.get(uid);
+        if (!pos) continue;
+        const distance = Math.hypot(pos[0] - x, pos[1] - y);
+        if (distance <= radius) {
+          results.push({
+            userId: uid,
+            username: profile.username || uid,
+            position: pos,
+            distance: Number(distance.toFixed(2)),
+            canHear: distance <= 100,
+          });
+        }
+      }
+      return res.status(200).json({
+        success: true,
+        center: [x, y],
+        radius,
+        count: results.length,
+        queryTimeMs: 0.1,
+        users: results,
       });
     }
 
@@ -277,6 +359,46 @@ app.get("/api/avatars/nearby-to/:userId", async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Radius must be a valid non-negative number.",
+      });
+    }
+
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      const cleanId = userId.trim();
+      const speakerProfile = userProfiles.get(cleanId);
+      const speakerPos = speakerProfile?.position || proximityState.positions.get(cleanId);
+      if (!speakerPos) {
+        return res.status(404).json({
+          success: false,
+          message: "Target avatar not found or is offline.",
+        });
+      }
+      const usersWithDistance = [];
+      for (const [uid, profile] of userProfiles.entries()) {
+        if (uid === cleanId) continue;
+        const pos = profile.position || proximityState.positions.get(uid);
+        if (!pos) continue;
+        const distance = Math.hypot(pos[0] - speakerPos[0], pos[1] - speakerPos[1]);
+        if (distance <= radius) {
+          usersWithDistance.push({
+            userId: uid,
+            username: profile.username || uid,
+            position: pos,
+            isOnline: true,
+            distance: Number(distance.toFixed(2)),
+          });
+        }
+      }
+      return res.status(200).json({
+        success: true,
+        message: "Nearby users retrieved successfully.",
+        targetUser: {
+          userId: cleanId,
+          username: speakerProfile?.username || cleanId,
+          position: speakerPos,
+        },
+        radius,
+        count: usersWithDistance.length,
+        nearbyUsers: usersWithDistance,
       });
     }
 
@@ -389,6 +511,36 @@ app.get("/api/avatars/within", async (req, res) => {
       });
     }
 
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      const avatars = [];
+      for (const [uid, profile] of userProfiles.entries()) {
+        const pos = profile.position || proximityState.positions.get(uid);
+        if (!pos) continue;
+        const [px, py] = pos;
+        if (px >= x1 && px <= x2 && py >= y1 && py <= y2) {
+          avatars.push({
+            userId: uid,
+            username: profile.username || uid,
+            position: pos,
+            isOnline: true,
+            updatedAt: new Date(),
+          });
+        }
+      }
+      return res.status(200).json({
+        success: true,
+        message: "Avatars inside the defined area retrieved successfully.",
+        area: {
+          minX: x1,
+          minY: y1,
+          maxX: x2,
+          maxY: y2,
+        },
+        count: avatars.length,
+        avatars,
+      });
+    }
+
     // Find online avatars inside the rectangular area
     const avatars = await Avatar.find({
       isOnline: true,
@@ -448,6 +600,46 @@ app.get("/api/avatars/nearest/:userId", async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Radius must be non-negative and limit must be 1–100.",
+      });
+    }
+
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      const cleanId = userId.trim();
+      const speakerProfile = userProfiles.get(cleanId);
+      const speakerPos = speakerProfile?.position || proximityState.positions.get(cleanId);
+      if (!speakerPos) {
+        return res.status(404).json({
+          success: false,
+          message: "User not found or offline.",
+        });
+      }
+      const results = [];
+      for (const [uid, profile] of userProfiles.entries()) {
+        if (uid === cleanId) continue;
+        const pos = profile.position || proximityState.positions.get(uid);
+        if (!pos) continue;
+        const distance = calculateDistance(speakerPos, pos);
+        if (distance <= radius) {
+          results.push({
+            userId: uid,
+            username: profile.username || uid,
+            position: pos,
+            isOnline: true,
+            distance: Number(distance.toFixed(2)),
+          });
+        }
+      }
+      results.sort((a, b) => a.distance - b.distance);
+      return res.status(200).json({
+        success: true,
+        currentUser: {
+          userId: cleanId,
+          username: speakerProfile?.username || cleanId,
+          position: speakerPos,
+        },
+        radius,
+        count: results.slice(0, limit).length,
+        nearbyUsers: results.slice(0, limit),
       });
     }
 
@@ -513,6 +705,41 @@ app.get("/api/avatars/nearest/:userId", async (req, res) => {
 app.get("/api/avatars/earshot/:userId", async (req, res) => {
   try {
     const userId = req.params.userId.trim();
+
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      const cleanId = userId.trim();
+      const speakerProfile = userProfiles.get(cleanId);
+      const speakerPos = speakerProfile?.position || proximityState.positions.get(cleanId);
+      if (!speakerPos) {
+        return res.status(404).json({
+          success: false,
+          message: "Avatar not found or offline.",
+        });
+      }
+      const usersInEarshot = [];
+      for (const [uid, profile] of userProfiles.entries()) {
+        if (uid === cleanId) continue;
+        const pos = profile.position || proximityState.positions.get(uid);
+        if (!pos) continue;
+        const distance = calculateDistance(speakerPos, pos);
+        if (distance <= EARSHOT_RADIUS) {
+          usersInEarshot.push({
+            userId: uid,
+            username: profile.username || uid,
+            position: pos,
+            distance: Number(distance.toFixed(2)),
+            canHear: true,
+          });
+        }
+      }
+      return res.status(200).json({
+        success: true,
+        userId: cleanId,
+        radius: EARSHOT_RADIUS,
+        count: usersInEarshot.length,
+        usersInEarshot,
+      });
+    }
 
     const currentUser = await Avatar.findOne({
       userId,
@@ -582,6 +809,58 @@ app.get("/api/avatars/proximity-groups", async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Radius must be greater than 0 and at most 1000.",
+      });
+    }
+
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      const proximityGroups = [];
+      for (const [uid, profile] of userProfiles.entries()) {
+        const pos = profile.position || proximityState.positions.get(uid);
+        if (!pos) continue;
+        const nearbyUsers = [];
+        for (const [otherId, otherProfile] of userProfiles.entries()) {
+          if (otherId === uid) continue;
+          const otherPos = otherProfile.position || proximityState.positions.get(otherId);
+          if (!otherPos) continue;
+          const distance = Math.hypot(otherPos[0] - pos[0], otherPos[1] - pos[1]);
+          if (distance <= radius) {
+            nearbyUsers.push({
+              userId: otherId,
+              username: otherProfile.username || otherId,
+              position: otherPos,
+              distance: Number(distance.toFixed(2)),
+              canHear: true,
+            });
+          }
+        }
+        proximityGroups.push({
+          groupId: `proximity-${uid}`,
+          centerUser: {
+            userId: uid,
+            username: profile.username || uid,
+            position: pos,
+          },
+          radius,
+          memberCount: nearbyUsers.length + 1,
+          nearbyUserCount: nearbyUsers.length,
+          members: [
+            {
+              userId: uid,
+              username: profile.username || uid,
+              position: pos,
+              distance: 0,
+              canHear: true,
+            },
+            ...nearbyUsers,
+          ],
+        });
+      }
+      return res.status(200).json({
+        success: true,
+        radius,
+        onlineUserCount: userProfiles.size,
+        groupCount: proximityGroups.length,
+        proximityGroups,
       });
     }
 
@@ -840,11 +1119,15 @@ const startServer = async () => {
   try {
     await connectDB();
 
-    try {
-      await Avatar.createIndexes();
-      console.log("Avatar geospatial indexes are ready");
-    } catch (indexError) {
-      console.warn("Avatar index check:", indexError.message);
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      try {
+        await Avatar.createIndexes();
+        console.log("Avatar geospatial indexes are ready");
+      } catch (indexError) {
+        console.warn("Avatar index check:", indexError.message);
+      }
+    } else {
+      console.log("Avatar in-memory geospatial state is ready");
     }
 
     if (process.env.REDIS_URL) {

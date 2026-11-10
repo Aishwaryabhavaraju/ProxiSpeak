@@ -1,7 +1,23 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const Room = require("../models/Room");
 
 const router = express.Router();
+
+const inMemoryRooms = new Map([
+  [
+    "MAIN-OFFICE",
+    {
+      roomId: "MAIN-OFFICE",
+      name: "Main Virtual Office",
+      description: "Default ProxiSpeak Spatial Workspace",
+      creatorId: "system",
+      creatorName: "System",
+      isPrivate: false,
+      createdAt: new Date().toISOString(),
+    },
+  ],
+]);
 
 function generateRoomId() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -25,6 +41,36 @@ router.post("/", async (req, res) => {
     }
 
     let roomId;
+
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      let attempts = 0;
+      while (!roomId && attempts < 10) {
+        attempts++;
+        const candidate = generateRoomId();
+        if (!inMemoryRooms.has(candidate)) {
+          roomId = candidate;
+        }
+      }
+      if (!roomId) {
+        roomId = `ROOM-${Date.now().toString(36).toUpperCase()}`;
+      }
+      const room = {
+        roomId,
+        name: name.trim(),
+        description: (description || "").trim(),
+        creatorId: creatorId || "guest",
+        creatorName: creatorName || "Guest",
+        isPrivate: Boolean(isPrivate),
+        createdAt: new Date().toISOString(),
+      };
+      inMemoryRooms.set(roomId, room);
+      return res.status(201).json({
+        success: true,
+        message: "Room created successfully",
+        room,
+      });
+    }
+
     let attempts = 0;
     while (!roomId && attempts < 10) {
       attempts++;
@@ -74,6 +120,13 @@ router.post("/", async (req, res) => {
 // GET /api/rooms - List recent public rooms
 router.get("/", async (req, res) => {
   try {
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      return res.status(200).json({
+        success: true,
+        rooms: Array.from(inMemoryRooms.values()).filter((r) => !r.isPrivate),
+      });
+    }
+
     const rooms = await Room.find({ isPrivate: false })
       .sort({ createdAt: -1 })
       .limit(20)
@@ -96,6 +149,27 @@ router.get("/", async (req, res) => {
 router.get("/:roomId", async (req, res) => {
   try {
     const normalizedId = req.params.roomId.trim().toUpperCase();
+
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      let room = inMemoryRooms.get(normalizedId);
+      if (!room) {
+        room = {
+          roomId: normalizedId,
+          name: `${normalizedId} Office`,
+          description: "Active virtual workspace",
+          creatorId: "guest",
+          creatorName: "Guest",
+          isPrivate: false,
+          createdAt: new Date().toISOString(),
+        };
+        inMemoryRooms.set(normalizedId, room);
+      }
+      return res.status(200).json({
+        success: true,
+        room,
+      });
+    }
+
     const room = await Room.findOne({ roomId: normalizedId }).lean();
 
     if (!room) {
@@ -119,4 +193,3 @@ router.get("/:roomId", async (req, res) => {
 });
 
 module.exports = router;
-

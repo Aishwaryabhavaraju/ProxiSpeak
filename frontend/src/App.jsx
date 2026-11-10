@@ -530,11 +530,21 @@ export default function App() {
           const t = now / 3000;
           const targetX = 500 + Math.sin(t) * 180;
           const targetY = 320 + Math.cos(t) * 120;
-          const res = stepAvatarMovement(local.x, local.y, targetX, targetY, dt, 140);
-          newX = res.x;
-          newY = res.y;
-          dir = res.direction;
-          moved = res.moved;
+          const dx = targetX - local.x;
+          const dy = targetY - local.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist > 2) {
+            const speed = 140;
+            const step = Math.min(dist, speed * dt);
+            const angle = Math.atan2(dy, dx);
+            const stepX = Math.cos(angle) * step;
+            const stepY = Math.sin(angle) * step;
+            const slide = moveWithSliding(local.x, local.y, stepX, stepY);
+            newX = slide.x;
+            newY = slide.y;
+            dir = angle;
+            moved = true;
+          }
         } else {
           // Keyboard controls (WASD & Arrow keys)
           let kx = 0;
@@ -550,22 +560,49 @@ export default function App() {
             const stepX = (kx / mag) * speed * dt;
             const stepY = (ky / mag) * speed * dt;
             const slide = moveWithSliding(local.x, local.y, stepX, stepY);
-            newX = slide.x;
-            newY = slide.y;
-            dir = Math.atan2(ky, kx);
-            moved = true;
-            local.targetX = newX;
-            local.targetY = newY;
+            if (!slide.blocked) {
+              newX = slide.x;
+              newY = slide.y;
+              dir = Math.atan2(ky, kx);
+              moved = true;
+            }
+            local.targetX = null;
+            local.targetY = null;
           } else if (
             typeof local.targetX === "number" &&
-            (local.targetX !== local.x || local.targetY !== local.y)
+            typeof local.targetY === "number"
           ) {
-            // Target click movement
-            const res = stepAvatarMovement(local.x, local.y, local.targetX, local.targetY, dt, 160);
-            newX = res.x;
-            newY = res.y;
-            dir = res.direction;
-            moved = res.moved;
+            // Target click movement toward clicked coordinates
+            const dx = local.targetX - local.x;
+            const dy = local.targetY - local.y;
+            const dist = Math.hypot(dx, dy);
+
+            if (dist > 3) {
+              const speed = 160;
+              const step = Math.min(dist, speed * dt);
+              const angle = Math.atan2(dy, dx);
+              const stepX = Math.cos(angle) * step;
+              const stepY = Math.sin(angle) * step;
+              const slide = moveWithSliding(local.x, local.y, stepX, stepY);
+
+              if (slide.blocked || (slide.x === local.x && slide.y === local.y)) {
+                // If blocked by obstacle, smoothly stop and clear target
+                local.targetX = null;
+                local.targetY = null;
+              } else {
+                newX = slide.x;
+                newY = slide.y;
+                dir = angle;
+                moved = true;
+              }
+            } else {
+              // Reached target destination cleanly
+              newX = local.targetX;
+              newY = local.targetY;
+              local.targetX = null;
+              local.targetY = null;
+              moved = true;
+            }
           }
         }
 
@@ -577,12 +614,15 @@ export default function App() {
         }
       }
 
-      // Interpolate remote avatars
+      // Interpolate remote avatars toward server positions
       for (const peer of worldRef.current.remoteUsers) {
-        if (typeof peer.serverX === "number") {
-          const interp = interpolateRemoteAvatar(peer.x, peer.y, peer.serverX, peer.serverY, dt);
+        if (typeof peer.serverX === "number" && typeof peer.serverY === "number") {
+          const interp = interpolateRemoteAvatar(peer, dt, 10);
           peer.x = interp.x;
           peer.y = interp.y;
+          if (typeof interp.direction === "number") {
+            peer.direction = interp.direction;
+          }
         }
       }
 
@@ -627,12 +667,16 @@ export default function App() {
   }, [currentRoom]);
 
   function handleSelectLocalTarget({ x, y }) {
-    if (worldRef.current.localUser) {
-      worldRef.current.localUser = {
-        ...worldRef.current.localUser,
-        targetX: x,
-        targetY: y,
-      };
+    setLocalAutoWalk(false);
+    if (worldRef.current.localUser && typeof x === "number" && typeof y === "number") {
+      const minX = 28;
+      const maxX = OFFICE_CONFIG.width - 28;
+      const minY = 28;
+      const maxY = OFFICE_CONFIG.height - 28;
+      const clampedX = Math.max(minX, Math.min(maxX, x));
+      const clampedY = Math.max(minY, Math.min(maxY, y));
+      worldRef.current.localUser.targetX = clampedX;
+      worldRef.current.localUser.targetY = clampedY;
     }
   }
 

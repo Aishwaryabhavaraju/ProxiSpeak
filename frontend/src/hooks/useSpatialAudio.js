@@ -58,12 +58,12 @@ export function useSpatialAudio(
 
         if (inEarshot && !wasConnected) {
           activePeersRef.current.add(remote.id);
-          if (connectionState === "connected" && micEnabled) {
+          if (connectionState === "connected") {
             const isInitiator = String(localUser.id) < String(remote.id);
             webrtcManager.createPeerConnection(remote.id, isInitiator);
           }
-        } else if (inEarshot && wasConnected && connectionState === "connected" && micEnabled) {
-          // Ensure peer connection is created once micEnabled turns true while already in earshot
+        } else if (inEarshot && wasConnected && connectionState === "connected") {
+          // Ensure peer connection is established if peer was previously tracked but not connected
           if (!webrtcManager.peers.has(remote.id)) {
             const isInitiator = String(localUser.id) < String(remote.id);
             webrtcManager.createPeerConnection(remote.id, isInitiator);

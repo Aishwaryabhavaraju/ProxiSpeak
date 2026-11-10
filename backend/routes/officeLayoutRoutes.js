@@ -4,6 +4,22 @@ const OfficeLayout = require("../models/OfficeLayout");
 
 const router = express.Router();
 
+const inMemoryOfficeLayouts = new Map([
+  [
+    "MAIN-OFFICE",
+    {
+      roomId: "MAIN-OFFICE",
+      roomName: "Main Virtual Office",
+      dimensions: { width: 760, height: 480 },
+      background: "#111827",
+      furniture: [
+        { name: "Executive Desk", type: "desk", x: 100, y: 120, width: 90, height: 50, blocksAudio: true, obstacleType: "desk" },
+        { name: "Meeting Table", type: "table", x: 380, y: 200, width: 140, height: 80, blocksAudio: true, obstacleType: "table" },
+      ],
+    },
+  ],
+]);
+
 // --------------------------------------------------
 // POST: Create and save a new office layout
 // URL: POST /api/office-layouts
@@ -63,9 +79,23 @@ router.post("/", async (req, res) => {
 // --------------------------------------------------
 router.get("/:roomId", async (req, res) => {
   try {
-    const officeLayout = await OfficeLayout.findOne({
-      roomId: req.params.roomId,
-    });
+    let officeLayout = null;
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      officeLayout = await OfficeLayout.findOne({
+        roomId: req.params.roomId,
+      });
+    } else {
+      try {
+        officeLayout = await OfficeLayout.findOne({
+          roomId: req.params.roomId,
+        });
+      } catch (_) {
+        officeLayout = null;
+      }
+      if (!officeLayout && inMemoryOfficeLayouts.has(req.params.roomId)) {
+        officeLayout = inMemoryOfficeLayouts.get(req.params.roomId);
+      }
+    }
 
     if (!officeLayout) {
       return res.status(404).json({

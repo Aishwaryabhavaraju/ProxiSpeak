@@ -1,8 +1,12 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const { randomUUID } = require("crypto");
 const ChatMessage = require("../models/ChatMessage");
 
 const router = express.Router();
+
+const inMemoryRoomMessages = new Map();
+const inMemoryDirectMessages = [];
 
 /**
  * GET /api/chat/room/:roomId
@@ -12,6 +16,16 @@ router.get("/room/:roomId", async (req, res) => {
   try {
     const roomId = String(req.params.roomId).trim().toUpperCase();
     const limit = Math.min(Number(req.query.limit) || 100, 200);
+
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      const msgs = inMemoryRoomMessages.get(roomId) || [];
+      return res.status(200).json({
+        success: true,
+        roomId,
+        count: msgs.length,
+        messages: msgs.slice(-limit),
+      });
+    }
 
     const messages = await ChatMessage.find({
       type: "room",
@@ -46,6 +60,20 @@ router.get("/direct/:userA/:userB", async (req, res) => {
     const userA = String(req.params.userA).trim();
     const userB = String(req.params.userB).trim();
     const limit = Math.min(Number(req.query.limit) || 100, 200);
+
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      const msgs = inMemoryDirectMessages.filter(
+        (m) =>
+          (m.senderId === userA && m.recipientId === userB) ||
+          (m.senderId === userB && m.recipientId === userA)
+      );
+      return res.status(200).json({
+        success: true,
+        participants: [userA, userB],
+        count: msgs.length,
+        messages: msgs.slice(-limit),
+      });
+    }
 
     const messages = await ChatMessage.find({
       type: "direct",

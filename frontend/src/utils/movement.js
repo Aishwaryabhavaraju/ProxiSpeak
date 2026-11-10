@@ -1,4 +1,4 @@
-import { OFFICE_CONFIG, getCollisionObstacles } from "./officeLayout";
+import { OFFICE_CONFIG, getCollisionObstacles } from "./officeLayout.js";
 
 /**
  * Checks if a circular avatar at (x, y) with radius `r` collides with any rectangular obstacle
@@ -39,18 +39,12 @@ export function moveWithSliding(x, y, dx, dy, radius = OFFICE_CONFIG.avatarRadiu
     return { x: fullX, y: fullY, blocked: false };
   }
   // Try sliding horizontally only
-  if (Math.abs(dx) > 0.01 && !checkCollision(fullX, y, radius, layout)) {
+  if (Math.abs(dx) > 0.001 && !checkCollision(fullX, y, radius, layout)) {
     return { x: fullX, y, blocked: false };
   }
   // Try sliding vertically only
-  if (Math.abs(dy) > 0.01 && !checkCollision(x, fullY, radius, layout)) {
+  if (Math.abs(dy) > 0.001 && !checkCollision(x, fullY, radius, layout)) {
     return { x, y: fullY, blocked: false };
-  }
-  // Try perpendicular detour nudge around obstacle
-  const perpX = x - dy * 0.6;
-  const perpY = y + dx * 0.6;
-  if (!checkCollision(perpX, perpY, radius, layout)) {
-    return { x: perpX, y: perpY, blocked: false };
   }
   return { x, y, blocked: true };
 }

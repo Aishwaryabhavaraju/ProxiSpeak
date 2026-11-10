@@ -1,8 +1,7 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useCallback } from "react";
 import { OFFICE_CONFIG } from "../utils/officeLayout";
 import { calculateDistance } from "../utils/distance";
 import { calculateVolume } from "../utils/audioCalculations";
-import { createPerformanceMonitor } from "../utils/performanceMonitor";
 
 /**
  * 60 FPS Canvas rendering the dark-theme Virtual Office, cursor-following movement,
@@ -18,8 +17,6 @@ function OfficeCanvas({
 }) {
   const canvasRef = useRef(null);
   const propsRef = useRef({ audioRadius, speakerMuted, avatarReactions });
-  const [isMouseDown, setIsMouseDown] = useState(false);
-  const mousePosRef = useRef(null);
 
   useEffect(() => {
     propsRef.current = { audioRadius, speakerMuted, avatarReactions };
@@ -30,7 +27,6 @@ function OfficeCanvas({
     const canvas = canvasRef.current;
     if (!canvas) return undefined;
     const ctx = canvas.getContext("2d");
-    const perfMonitor = createPerformanceMonitor();
     let animationId;
     let pulseAngle = 0;
 
@@ -181,8 +177,13 @@ function OfficeCanvas({
         }
       }
 
-      // 8. Draw Cursor Target Indicator if moving
-      if (me && (Math.hypot(me.targetX - me.x, me.targetY - me.y) > 8)) {
+      // 8. Draw Cursor Target Indicator if moving toward valid destination
+      if (
+        me &&
+        typeof me.targetX === "number" &&
+        typeof me.targetY === "number" &&
+        Math.hypot(me.targetX - me.x, me.targetY - me.y) > 6
+      ) {
         ctx.beginPath();
         ctx.arc(me.targetX, me.targetY, 4, 0, Math.PI * 2);
         ctx.fillStyle = "#5EEAD4";
@@ -329,23 +330,6 @@ function OfficeCanvas({
         }
       }
 
-      // 9. Canvas Performance Monitor Badge (60 FPS target)
-      const perf = perfMonitor.update();
-      ctx.fillStyle = "rgba(17, 24, 39, 0.85)";
-      ctx.beginPath();
-      ctx.roundRect(OFFICE_CONFIG.width - 125, 10, 115, 22, 6);
-      ctx.fill();
-      ctx.strokeStyle = "#374151";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      ctx.font = "bold 10px monospace";
-      ctx.fillStyle = perf.fps >= 50 ? "#10B981" : "#F59E0B";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(`${perf.fps} FPS • ${perf.frameTime}ms`, OFFICE_CONFIG.width - 67, 21);
-      ctx.textBaseline = "alphabetic";
-
       animationId = requestAnimationFrame(drawScene);
     }
 
@@ -355,42 +339,30 @@ function OfficeCanvas({
     };
   }, [worldRef]);
 
-  // Coordinate mapper from event to canvas dimensions
+  // Coordinate mapper from click/mouse event to canvas coordinates
   const getCanvasCoords = useCallback((event) => {
     if (!canvasRef.current) return null;
     const rect = canvasRef.current.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
     const scaleX = OFFICE_CONFIG.width / rect.width;
     const scaleY = OFFICE_CONFIG.height / rect.height;
     return {
-      x: Math.round((event.clientX - rect.left) * scaleX),
-      y: Math.round((event.clientY - rect.top) * scaleY),
+      x: Math.max(28, Math.min(OFFICE_CONFIG.width - 28, Math.round((event.clientX - rect.left) * scaleX))),
+      y: Math.max(28, Math.min(OFFICE_CONFIG.height - 28, Math.round((event.clientY - rect.top) * scaleY))),
     };
   }, []);
 
-  function handleMouseDown(event) {
-    setIsMouseDown(true);
+  function handlePointerDown(event) {
+    if (event.button !== 0) return; // Primary left button only
     const coords = getCanvasCoords(event);
     if (coords && onSelectLocalTarget) {
       onSelectLocalTarget(coords);
     }
   }
 
-  function handleMouseMove(event) {
-    const coords = getCanvasCoords(event);
-    if (!coords) return;
-    mousePosRef.current = coords;
-
-    // Follow cursor when mouse is pressed or dragged
-    if (isMouseDown && onSelectLocalTarget) {
-      onSelectLocalTarget(coords);
-    }
-  }
-
-  function handleMouseUp() {
-    setIsMouseDown(false);
-  }
-
-  function handleClick(event) {
+  function handlePointerMove(event) {
+    // Only track if primary button is actively held down (click-and-drag)
+    if (event.buttons !== 1) return;
     const coords = getCanvasCoords(event);
     if (coords && onSelectLocalTarget) {
       onSelectLocalTarget(coords);
@@ -405,11 +377,8 @@ function OfficeCanvas({
         tabIndex={0}
         role="application"
         aria-label="ProxiSpeak 2D Virtual Office Canvas. Click anywhere to move or use Arrow/WASD keys."
-        onClick={handleClick}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
       />
     </div>
   );
