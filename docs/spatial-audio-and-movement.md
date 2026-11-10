@@ -98,3 +98,4 @@ When moving by $(\Delta x, \Delta y)$:
 2. **Horizontal Slide**: If diagonal collides, test $(x + \Delta x, y)$. If free, avatar glides horizontally along the obstacle face.
 3. **Vertical Slide**: If horizontal collides, test $(x, y + \Delta y)$. If free, avatar glides vertically.
 4. **Clean Halt**: If both axes are obstructed, the movement stops cleanly (`blocked: true`) without artificial repulsive forces or corner jitter.
+
